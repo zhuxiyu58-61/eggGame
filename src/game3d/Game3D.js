@@ -440,6 +440,10 @@ export class Game3D {
         this._buildChickens();
         this._initFireworks();
         this._initBats();
+        this._buildBeach();
+        this._buildStreamAndBridge();
+        this._initWind();
+        this._addRooftopCat();
 
         // 通关标记应用到已完成的路 + 全通后解锁伙伴
         this._applyWonGoals();
@@ -821,8 +825,12 @@ export class Game3D {
                     c.y + 0.4,
                     c.z + (Math.random() - 0.5) * 0.15
                 );
+                // 烟受统一风影响
+                const windVx = this.wind ? Math.cos(this.wind.dir) * this.wind.strength * 1.5 : 0;
+                const windVz = this.wind ? Math.sin(this.wind.dir) * this.wind.strength * 1.5 : 0;
                 puff.userData = {
-                    vx: (Math.random() - 0.5) * 0.25,
+                    vx: (Math.random() - 0.5) * 0.25 + windVx,
+                    vz: (Math.random() - 0.5) * 0.15 + windVz,
                     vy: 0.55 + Math.random() * 0.3,
                     life: 3.5,
                     full: 3.5,
@@ -842,6 +850,7 @@ export class Game3D {
             }
             p.position.x += p.userData.vx * dt;
             p.position.y += p.userData.vy * dt;
+            p.position.z += (p.userData.vz || 0) * dt;
             const k = 1 - p.userData.life / p.userData.full;
             const sc = p.userData.baseScale * (1 + k * 1.5);
             p.scale.setScalar(sc);
@@ -1982,6 +1991,217 @@ export class Game3D {
             const flap = 0.5 + Math.abs(Math.sin(t * 10 + d.phase)) * 0.5;
             b.scale.y = 0.35 * flap;
         });
+    }
+
+    _buildBeach() {
+        // 湖边沙滩区域：椭圆沙地包住湖
+        const lx = 48, lz = -42;
+        const sand = new THREE.Mesh(
+            new THREE.CircleGeometry(13, 48),
+            new THREE.MeshToonMaterial({ color: 0xf5dcb5 })
+        );
+        sand.rotation.x = -Math.PI / 2;
+        sand.position.set(lx, 0.04, lz);  // 在湖下方一点点
+        sand.receiveShadow = true;
+        this.scene.add(sand);
+
+        // 4 棵椰子树（沙滩边缘）
+        const trees = [
+            { x: lx + 9,  z: lz + 5,  tilt: -0.15 },
+            { x: lx - 9,  z: lz - 4,  tilt:  0.10 },
+            { x: lx + 4,  z: lz + 10, tilt: -0.20 },
+            { x: lx - 6,  z: lz + 9,  tilt:  0.12 },
+        ];
+        trees.forEach(t => this._addPalmTree(t.x, t.z, t.tilt));
+    }
+
+    _addPalmTree(x, z, tilt) {
+        const group = new THREE.Group();
+        // 树干（斜立卡通柱）
+        const trunkH = 3.5 + Math.random() * 0.8;
+        const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.18, 0.25, trunkH, 10),
+            new THREE.MeshToonMaterial({ color: 0x8a5a2e })
+        );
+        trunk.position.y = trunkH / 2;
+        trunk.rotation.z = tilt;
+        trunk.castShadow = true;
+        addOutline(trunk, 0.04);
+        group.add(trunk);
+
+        // 树冠（6 片椭圆叶向四周下垂）
+        const leafMat = new THREE.MeshToonMaterial({ color: 0x4caa5c, side: THREE.DoubleSide });
+        const leafCount = 6;
+        for (let i = 0; i < leafCount; i++) {
+            const ang = (i / leafCount) * Math.PI * 2;
+            const leaf = new THREE.Mesh(
+                new THREE.SphereGeometry(1.0, 10, 6),
+                leafMat
+            );
+            leaf.scale.set(0.3, 0.15, 1.4);
+            leaf.position.set(
+                Math.cos(ang) * 1.2 + tilt * trunkH * 0.5,
+                trunkH + Math.sin(ang * 2) * 0.1,
+                Math.sin(ang) * 1.2
+            );
+            leaf.rotation.y = ang + Math.PI / 2;
+            leaf.rotation.x = -0.3;
+            leaf.castShadow = true;
+            addOutline(leaf, 0.05);
+            group.add(leaf);
+        }
+        // 椰子（2-3 颗深褐小球）
+        const coconutMat = new THREE.MeshToonMaterial({ color: 0x5a3a2a });
+        const coconutCount = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < coconutCount; i++) {
+            const c = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18, 8, 6),
+                coconutMat
+            );
+            const ang = Math.random() * Math.PI * 2;
+            c.position.set(
+                Math.cos(ang) * 0.35 + tilt * trunkH * 0.5,
+                trunkH - 0.05,
+                Math.sin(ang) * 0.35
+            );
+            addOutline(c, 0.05);
+            group.add(c);
+        }
+        group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI * 2;
+        this.scene.add(group);
+    }
+
+    _buildStreamAndBridge() {
+        // 小溪：从湖向北延伸一段细长 plane
+        const stream = new THREE.Mesh(
+            new THREE.PlaneGeometry(2.2, 24),
+            new THREE.MeshStandardMaterial({
+                color: 0x6890c8, transparent: true, opacity: 0.85,
+                metalness: 0.2, roughness: 0.3,
+            })
+        );
+        stream.rotation.x = -Math.PI / 2;
+        stream.position.set(45, 0.08, -25);  // 湖 (-42 z) 向北
+        this.scene.add(stream);
+        // 溪边石头点缀
+        const stoneMat = new THREE.MeshToonMaterial({ color: 0xaaa8a0 });
+        for (let i = 0; i < 8; i++) {
+            const k = (i - 4) * 2.5;
+            for (const sx of [-1.5, 1.5]) {
+                if (Math.random() < 0.5) continue;
+                const stone = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.15 + Math.random() * 0.15, 8, 6),
+                    stoneMat
+                );
+                stone.scale.y = 0.6;
+                stone.position.set(45 + sx + (Math.random() - 0.5) * 0.3, 0.10, -25 + k);
+                this.scene.add(stone);
+            }
+        }
+        // 石拱桥（横跨小溪一段）
+        const bridge = new THREE.Group();
+        const archStoneMat = new THREE.MeshToonMaterial({ color: 0xb8b0a0 });
+        // 桥板
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.25, 2.6), archStoneMat);
+        deck.position.y = 0.55;
+        deck.castShadow = true;
+        deck.receiveShadow = true;
+        addOutline(deck, 0.025);
+        bridge.add(deck);
+        // 两侧栏杆
+        for (const sz of [-1.1, 1.1]) {
+            const rail = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.5, 0.12), archStoneMat);
+            rail.position.set(0, 0.95, sz);
+            addOutline(rail, 0.04);
+            bridge.add(rail);
+            for (const sx of [-1.8, -0.6, 0.6, 1.8]) {
+                const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, 0.18), archStoneMat);
+                pillar.position.set(sx, 0.85, sz);
+                addOutline(pillar, 0.04);
+                bridge.add(pillar);
+            }
+        }
+        // 拱（半圆）
+        const arch = new THREE.Mesh(
+            new THREE.TorusGeometry(1.2, 0.18, 8, 12, Math.PI),
+            archStoneMat
+        );
+        arch.position.set(0, 0.6, 0);
+        arch.rotation.z = Math.PI;
+        arch.rotation.y = Math.PI / 2;
+        addOutline(arch, 0.04);
+        bridge.add(arch);
+
+        bridge.position.set(45, 0, -16);
+        this.scene.add(bridge);
+        // 桥板做障碍（蛋可以走上去）
+        this.obstacles.push({
+            min: new THREE.Vector3(45 - 2.25, 0, -16 - 1.3),
+            max: new THREE.Vector3(45 + 2.25, 0.7, -16 + 1.3),
+        });
+    }
+
+    _initWind() {
+        this.wind = { dir: 0.3, strength: 0.35 };
+    }
+
+    _updateWind(dt) {
+        const t = performance.now() * 0.0001;
+        this.wind.dir = Math.sin(t * 1.3) * 0.6 + 0.3;
+        this.wind.strength = 0.25 + Math.abs(Math.sin(t * 0.8)) * 0.4;
+        // 草地 shader 风强同步
+        if (this.grass && this.grass.material.userData.shader) {
+            this.grass.material.userData.shader.uniforms.uWindStrength.value = this.wind.strength;
+        }
+    }
+
+    _addRooftopCat() {
+        // 🐱 emoji sprite 站在小蓝家屋顶 (50, 20)
+        const c = document.createElement('canvas');
+        c.width = 128; c.height = 128;
+        const ctx = c.getContext('2d');
+        ctx.font = '110px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🐱', 64, 64);
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const cat = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+        }));
+        cat.scale.set(1.2, 1.2, 1);
+        cat.position.set(50, 6.6, 21.2);  // 房顶上
+        this.scene.add(cat);
+        this.rooftopCat = cat;
+    }
+
+    _checkWindmillKnockback() {
+        if (!this.animDecor) return;
+        const wm = this.animDecor.find(d => d.type === 'windmill');
+        if (!wm) return;
+        // 风车塔位置：build 时是 (-58, -22)
+        const wmX = -58, wmZ = -22;
+        const dx = this.player.position.x - wmX;
+        const dz = this.player.position.z - wmZ;
+        const dist = Math.hypot(dx, dz);
+        // 叶片在塔正前方 z=-21（hub 偏移 1）
+        // 叶片半径约 2.4
+        if (dist < 3.0 && this.player.position.y < 4.0 && !this._knockbackCooldown) {
+            // 计算 hub 旋转决定的某个叶片是否扫到这里
+            // 简化：直接进 3m + onGround = 弹飞
+            if (this.onGround) {
+                const nx = dx / (dist || 1);
+                const nz = dz / (dist || 1);
+                this.velocity.x = nx * 14;
+                this.velocity.z = nz * 14;
+                this.playerVy = 9;
+                this.onGround = false;
+                this._knockbackCooldown = 1.2;
+                this._tone(160, 0.25, 'square', 0.10);
+                this._tone(80, 0.3, 'sawtooth', 0.06, 0.05);
+            }
+        }
     }
 
     _addBench(x, z, ry) {
@@ -3674,6 +3894,13 @@ export class Game3D {
         this._updateChickens(dt);
         this._updateFireworks(dt);
         this._updateBats(dt);
+        this._updateWind(dt);
+        // 风车撞飞冷却
+        if (this._knockbackCooldown > 0) {
+            this._knockbackCooldown -= dt;
+            if (this._knockbackCooldown <= 0) this._knockbackCooldown = 0;
+        }
+        if (!this.dying && !this.won) this._checkWindmillKnockback();
         // 草地风偏移 shader uniform
         if (this.grass && this.grass.material.userData.shader) {
             this.grass.material.userData.shader.uniforms.uTime.value =
