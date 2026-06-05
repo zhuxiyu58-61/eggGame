@@ -215,6 +215,7 @@ const DECEL = 40;   // 减速度（松键渐出，不再瞬时刹停）
 
 export class Game3D {
     constructor(container, { onOpenCustomize } = {}) {
+        if (typeof window !== 'undefined') window.__game = this; // 调试用：控制台/测试可以 window.__game.player.position.set(...)
         this.container = container;
         this.onOpenCustomize = onOpenCustomize;
         this.style = loadStyle();
@@ -280,11 +281,16 @@ export class Game3D {
             new THREE.MeshStandardMaterial({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
         ));
 
-        // 2) 多帧渲染（每帧轻微转一下相机角度，让 frustum 覆盖到更多东西）
+        // 2) 多帧渲染（8 个不同相机角度+俯仰，让 frustum 覆盖整个场景）
         const origPos = this.camera.position.clone();
         const origRot = this.camera.rotation.clone();
-        for (let i = 0; i < 4; i++) {
-            this.camera.position.set(20 - i * 13, 12, 13 + i * 7);
+        const warmupViews = [
+            [20, 12, 13], [-20, 12, 13], [0, 30, 0],     // 旁、上俯瞰
+            [40, 10, 0], [-40, 10, 0], [0, 8, -40],      // 三方
+            [0, 4, 5], [0, 25, -80],                      // 室内角度、远北
+        ];
+        for (const v of warmupViews) {
+            this.camera.position.set(v[0], v[1], v[2]);
             this.camera.lookAt(0, 0, 0);
             this.renderer.compile(this.scene, this.camera);
             try {
@@ -340,14 +346,14 @@ export class Game3D {
         this.sun = new THREE.DirectionalLight(0xfff1d4, 0.95);
         this.sun.position.set(22, 32, 18);
         this.sun.castShadow = true;
-        this.sun.shadow.mapSize.set(2048, 2048);
-        const s = 55;
+        this.sun.shadow.mapSize.set(1024, 1024);  // 2048→1024：贴图减小 4 倍，渲染快很多
+        const s = 40;                              // 阴影范围也缩小，关注玩家周围
         this.sun.shadow.camera.left = -s;
         this.sun.shadow.camera.right = s;
         this.sun.shadow.camera.top = s;
         this.sun.shadow.camera.bottom = -s;
         this.sun.shadow.camera.near = 1;
-        this.sun.shadow.camera.far = 120;
+        this.sun.shadow.camera.far = 100;
         this.sun.shadow.bias = -0.0005;
         this.scene.add(this.sun);
         // 反光（蓝天→草地）
@@ -386,8 +392,9 @@ export class Game3D {
         // ===== 后处理：bloom（终点星会真发光）=====
         this.composer = new EffectComposer(this.renderer);
         this.composer.addPass(new RenderPass(this.scene, this.camera));
+        // bloom 半分辨率（视觉差异很小，性能省一半）
         this.bloomPass = new UnrealBloomPass(
-            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            new THREE.Vector2(window.innerWidth * 0.5, window.innerHeight * 0.5),
             0.85,  // strength
             0.5,   // radius
             0.72   // threshold（只让"亮过 0.72"的像素晕染）
@@ -537,6 +544,10 @@ export class Game3D {
         // ===== 新彩蛋 =====
         this._addTreeHiddenEmoji();
         this._addLighthouseNote();
+        // ===== BGM / 背包 / 成就 =====
+        this._initBGM();
+        this._initInventory();
+        this._initAchievements();
 
         // 通关标记应用到已完成的路 + 全通后解锁伙伴
         this._applyWonGoals();
@@ -560,9 +571,9 @@ export class Game3D {
 
     _addHouse(x, z, bodyColor, roofColor, signText) {
         const group = new THREE.Group();
-        const W = 5.5, H = 4.5, D = 5.5;
-        const wallT = 0.22;
-        const doorW = 1.7, doorH = 2.7;
+        const W = 8.0, H = 5.0, D = 8.0;  // 面积 30→64，2 倍多
+        const wallT = 0.25;
+        const doorW = 2.2, doorH = 3.0;
         const fadeables = [];  // 进屋后变透明的墙体/屋顶集合
 
         // 室内地板（深色木）
@@ -630,15 +641,16 @@ export class Game3D {
         top.position.set(0, doorH, D / 2);
         group.add(top);
 
-        // 门头招牌
+        // 门头招牌（加入 fadeables，进屋后跟着墙一起淡，避免挡住相机视野）
         if (signText) {
             const signTex = makeSignTexture(signText);
             const sign = new THREE.Sprite(new THREE.SpriteMaterial({
-                map: signTex, depthWrite: false,
+                map: signTex, depthWrite: false, transparent: true,
             }));
             sign.scale.set(2.0, 0.7, 1);
             sign.position.set(0, doorH + 0.55, D / 2 + 0.12);
             group.add(sign);
+            fadeables.push(sign);
         }
 
         // 屋顶（金字塔锥）
@@ -803,8 +815,9 @@ export class Game3D {
 
         // 记录到 houses 给透明化用
         this.houses.push({
-            min: new THREE.Vector3(x - W/2 + wallT, 0, z - D/2 + wallT),
-            max: new THREE.Vector3(x + W/2 - wallT, H, z + D/2 - wallT),
+            // inside 检测放宽到外墙边（不再减 wallT）：站门口就算"屋内"
+            min: new THREE.Vector3(x - W/2, 0, z - D/2),
+            max: new THREE.Vector3(x + W/2, H, z + D/2),
             fadeables,
             currentOpacity: 1,
         });
@@ -813,14 +826,17 @@ export class Game3D {
     _updateHouseTransparency(dt) {
         if (!this.houses) return;
         const p = this.player.position;
+        let anyInside = false;
         for (const h of this.houses) {
             const inside =
                 p.x > h.min.x && p.x < h.max.x &&
                 p.z > h.min.z && p.z < h.max.z;
+            if (inside) anyInside = true;
             // 进门/出门音效
             if (inside !== h.wasInside) {
                 this._playChime();
                 h.wasInside = inside;
+                if (inside) this._unlockAchievement('into_house');
             }
             const target = inside ? 0.18 : 1.0;
             h.currentOpacity += (target - h.currentOpacity) * Math.min(1, 8 * dt);
@@ -836,11 +852,17 @@ export class Game3D {
                 }
             }
         }
+        this.isInsideHouse = anyInside;
     }
 
     _playChime() {
         this._tone(660, 0.2, 'sine', 0.05);
         this._tone(880, 0.25, 'sine', 0.04, 0.1);
+    }
+
+    _finalizeInsideState() {
+        // _updateHouseTransparency 结束时调用——把累计的 anyInside 写到 isInsideHouse
+        // 直接在 transparency 函数里设置已经够用
     }
 
     _checkBeds(dt) {
@@ -889,12 +911,12 @@ export class Game3D {
     }
 
     _initSmoke() {
-        // 烟囱位置（house cfg 已知）+ 村屋有自己一个
+        // 烟囱位置（与房子 W=8, H=5 同步）
         this.chimneyPoses = [
-            { x: -42 + 5.5 * 0.28, y: 4.5 + 1.4, z: -28 + -5.5 * 0.22 },
-            { x:  50 + 5.5 * 0.28, y: 4.5 + 1.4, z:  20 + -5.5 * 0.22 },
-            { x: -55 + 5.5 * 0.28, y: 4.5 + 1.4, z:  35 + -5.5 * 0.22 },
-            { x:  35 + 5.5 * 0.28, y: 4.5 + 1.4, z: -52 + -5.5 * 0.22 },
+            { x: -42 + 8 * 0.28, y: 5 + 1.4, z: -28 + -8 * 0.22 },
+            { x:  50 + 8 * 0.28, y: 5 + 1.4, z:  20 + -8 * 0.22 },
+            { x: -55 + 8 * 0.28, y: 5 + 1.4, z:  35 + -8 * 0.22 },
+            { x:  35 + 8 * 0.28, y: 5 + 1.4, z: -52 + -8 * 0.22 },
         ];
         this.smokeTimers = this.chimneyPoses.map(() => Math.random() * 0.8);
     }
@@ -1294,6 +1316,8 @@ export class Game3D {
                     }
                     this._tone(880, 0.10, 'sine', 0.06);
                     this._tone(1320, 0.10, 'sine', 0.05, 0.05);
+                    this._unlockAchievement('first_star');
+                    if (this.collectStars.length === 0) this._unlockAchievement('all_stars');
                 }
             }
         }
@@ -1586,10 +1610,10 @@ export class Game3D {
     _buildHolidayLights() {
         this.holidayLights = [];
         const houseConfigs = [
-            { x: -42, z: -28, W: 5.5, D: 5.5, H: 4.5 },
-            { x:  50, z:  20, W: 5.5, D: 5.5, H: 4.5 },
-            { x: -55, z:  35, W: 5.5, D: 5.5, H: 4.5 },
-            { x:  35, z: -52, W: 5.5, D: 5.5, H: 4.5 },
+            { x: -42, z: -28, W: 8, D: 8, H: 5 },
+            { x:  50, z:  20, W: 8, D: 8, H: 5 },
+            { x: -55, z:  35, W: 8, D: 8, H: 5 },
+            { x:  35, z: -52, W: 8, D: 8, H: 5 },
         ];
         const colors = [0xff5050, 0xffd700, 0x66ff66, 0x66aaff, 0xff66cc];
         houseConfigs.forEach(c => {
@@ -1991,6 +2015,9 @@ export class Game3D {
     }
 
     _launchFirework() {
+        this._unlockAchievement('see_firework');
+        this._fireworkCount = (this._fireworkCount || 0) + 1;
+        if (this._fireworkCount >= 5) this._unlockAchievement('firework_lover');
         const colors = [0xff5050, 0xffd700, 0x66ff66, 0x66aaff, 0xff66cc, 0xffffff];
         const color = colors[Math.floor(Math.random() * colors.length)];
         const x = (Math.random() - 0.5) * 50;
@@ -2299,6 +2326,7 @@ export class Game3D {
                 this._knockbackCooldown = 1.2;
                 this._tone(160, 0.25, 'square', 0.10);
                 this._tone(80, 0.3, 'sawtooth', 0.06, 0.05);
+                this._unlockAchievement('windmill_kick');
             }
         }
     }
@@ -2633,6 +2661,7 @@ export class Game3D {
         this._launchFirework();
         // 拿星音效再来一遍庆贺
         this._playWin();
+        this._unlockAchievement('all_greet');
     }
 
     _initRainbow() {
@@ -2665,6 +2694,7 @@ export class Game3D {
         // 检测雨→晴切换：触发彩虹
         if (this._lastWeather === 'rain' && this.weather === 'sunny') {
             this._rainbowOpacity = 1.0;
+            this._unlockAchievement('see_rainbow');
         }
         this._lastWeather = this.weather;
         // 慢慢淡出
@@ -2697,6 +2727,7 @@ export class Game3D {
             this.swimming = true;
             this._splashWater(p.x, p.z);
             this._tone(440, 0.15, 'sine', 0.06);
+            this._unlockAchievement('first_swim');
         }
         if (!inLake && this.swimming) {
             this.swimming = false;
@@ -2808,7 +2839,10 @@ export class Game3D {
         });
     }
 
+    _onMeteorSeen() { this._unlockAchievement('see_meteor'); }
+
     _spawnMeteor() {
+        this._onMeteorSeen();
         const startAng = Math.random() * Math.PI * 2;
         const r = 80;
         const startX = Math.cos(startAng) * r;
@@ -2895,7 +2929,210 @@ export class Game3D {
         this.animDecor.push({ type: 'giantWindmill', hub });
     }
 
-    // ========= 浇花 =========
+    // ========= BGM（Web Audio 合成 ambient pad）=========
+    _initBGM() {
+        this.bgmMuted = false;
+        this.bgmStarted = false;
+        // I-vi-IV-V 风格的柔和和弦进行
+        this.bgmChords = [
+            [261.63, 329.63, 392.00],  // C major
+            [220.00, 261.63, 329.63],  // A minor
+            [174.61, 220.00, 261.63],  // F major
+            [196.00, 246.94, 293.66],  // G major
+        ];
+        this.bgmChordIdx = 0;
+        this.bgmTimer = 0;
+    }
+
+    _startBGM() {
+        if (this.bgmStarted || this.bgmMuted) return;
+        if (!this.audioCtx) return;
+        this.bgmStarted = true;
+        this.bgmGain = this.audioCtx.createGain();
+        this.bgmGain.gain.value = 0.06;  // 安静的环境垫底
+        this.bgmGain.connect(this.audioCtx.destination);
+        this._playBGMChord();
+    }
+
+    _playBGMChord() {
+        if (!this.audioCtx || this.bgmMuted || !this.bgmStarted) return;
+        const ctx = this.audioCtx;
+        const chord = this.bgmChords[this.bgmChordIdx];
+        const dur = 4.0;
+        chord.forEach((freq, i) => {
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.frequency.value = freq;
+            o.type = 'sine';
+            g.gain.setValueAtTime(0, ctx.currentTime);
+            g.gain.linearRampToValueAtTime(0.7 - i * 0.15, ctx.currentTime + 0.6);
+            g.gain.linearRampToValueAtTime(0.7 - i * 0.15, ctx.currentTime + dur - 0.6);
+            g.gain.linearRampToValueAtTime(0, ctx.currentTime + dur);
+            o.connect(g); g.connect(this.bgmGain);
+            o.start();
+            o.stop(ctx.currentTime + dur);
+        });
+        this.bgmChordIdx = (this.bgmChordIdx + 1) % this.bgmChords.length;
+    }
+
+    _updateBGM(dt) {
+        if (!this.bgmStarted || this.bgmMuted) return;
+        this.bgmTimer -= dt;
+        if (this.bgmTimer <= 0) {
+            this.bgmTimer = 4.0;
+            this._playBGMChord();
+        }
+    }
+
+    _toggleBGM() {
+        this.bgmMuted = !this.bgmMuted;
+        if (this.bgmGain) {
+            this.bgmGain.gain.value = this.bgmMuted ? 0 : 0.06;
+        }
+        this._showEasterBadge(this.bgmMuted ? '🔇 BGM 关' : '🔊 BGM 开');
+    }
+
+    // ========= 钓鱼背包 =========
+    _initInventory() {
+        this.inventory = this._loadInventory();
+        this._renderInventory();
+    }
+
+    _loadInventory() {
+        try {
+            const raw = localStorage.getItem('eggGameInventory');
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return [];
+    }
+
+    _saveInventory() {
+        try { localStorage.setItem('eggGameInventory', JSON.stringify(this.inventory)); } catch (e) {}
+    }
+
+    _addToInventory(emoji) {
+        if (!this.inventory) return;
+        this.inventory.push(emoji);
+        if (this.inventory.length > 16) this.inventory.shift();
+        this._saveInventory();
+        this._renderInventory();
+    }
+
+    _renderInventory() {
+        let bar = document.getElementById('inventory-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'inventory-bar';
+            Object.assign(bar.style, {
+                position: 'fixed', bottom: '12px', left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex', gap: '4px',
+                padding: '6px 10px',
+                background: 'rgba(0,0,0,0.45)',
+                borderRadius: '12px',
+                zIndex: '6',
+                pointerEvents: 'none',
+            });
+            document.body.appendChild(bar);
+        }
+        bar.innerHTML = this.inventory.length === 0
+            ? '<span style="color:#aaa;font-size:14px">背包空空</span>'
+            : this.inventory.map(e =>
+                `<span style="font-size:24px;display:inline-block;width:30px;text-align:center;">${e}</span>`
+            ).join('');
+    }
+
+    // ========= 成就系统 =========
+    _initAchievements() {
+        this.achievementsAll = [
+            { id: 'first_jump',       label: '🦘 第一次跳跃' },
+            { id: 'first_swim',       label: '🏊 第一次落水' },
+            { id: 'first_fish',       label: '🎣 钓到第一条' },
+            { id: 'first_flower',     label: '🌸 第一次浇花' },
+            { id: 'first_star',       label: '⭐ 收集第一颗星' },
+            { id: 'all_stars',        label: '🌟 24 颗星全收' },
+            { id: 'all_greet',        label: '👋 全村好朋友' },
+            { id: 'all_goals',        label: '🏆 三方全通' },
+            { id: 'see_meteor',       label: '☄️ 看见流星' },
+            { id: 'see_rainbow',      label: '🌈 看见彩虹' },
+            { id: 'see_lightning',    label: '⚡ 经历雷雨' },
+            { id: 'see_firework',     label: '🎆 看见烟花' },
+            { id: 'into_house',       label: '🏠 进过房子' },
+            { id: 'into_igloo',       label: '🧊 找到企鹅' },
+            { id: 'bridge_treasure',  label: '💎 桥下宝藏' },
+            { id: 'fountain_wish',    label: '⛲ 喷泉许愿' },
+            { id: 'backyard_gold',    label: '🧚 村屋小精灵' },
+            { id: 'konami',           label: '🕹️ Konami 神秘大法' },
+            { id: 'hidden_fox',       label: '🦊 树后小狐狸' },
+            { id: 'lighthouse_note',  label: '📜 守塔人留言' },
+            { id: 'all_seasons',      label: '🌳 四季轮回' },
+            { id: 'windmill_kick',    label: '💥 被风车弹飞' },
+            { id: 'firework_lover',   label: '🎇 烟花迷（看 5 次）' },
+            { id: 'snow_stand',       label: '⛄ 雪地站 10 秒' },
+            { id: 'water_player',     label: '💧 浇花专家（10 次）' },
+        ];
+        this._seasonsSeen = new Set();
+        this._snowStandT = 0;
+        this._waterCount = 0;
+        this.achievements = this._loadAchievements();
+        this._achievementChip = document.getElementById('game-achievements');
+        this._updateAchievementChip();
+        this._renderAchievementsList();
+    }
+
+    _loadAchievements() {
+        try {
+            const raw = localStorage.getItem('eggGameAchievements');
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return [];
+    }
+
+    _saveAchievements() {
+        try { localStorage.setItem('eggGameAchievements', JSON.stringify(this.achievements)); } catch (e) {}
+    }
+
+    _unlockAchievement(id) {
+        if (!this.achievements || !this.achievementsAll) return;  // 初始化前的调用直接吞
+        if (this.achievements.includes(id)) return;
+        const ach = this.achievementsAll.find(a => a.id === id);
+        if (!ach) return;
+        this.achievements.push(id);
+        this._saveAchievements();
+        this._updateAchievementChip();
+        this._renderAchievementsList();
+        this._showEasterBadge(`🏅 ${ach.label}`);
+        this._tone(880, 0.15, 'sine', 0.06);
+        this._tone(1320, 0.18, 'sine', 0.05, 0.07);
+    }
+
+    _updateAchievementChip() {
+        if (this._achievementChip) {
+            this._achievementChip.textContent =
+                `🏅 ${this.achievements.length}/${this.achievementsAll.length}`;
+        }
+    }
+
+    _renderAchievementsList() {
+        // 暂时只显示 chip，详情面板留给以后
+    }
+
+    _toggleAchievementsList() {
+        // 占位（如果未来要弹完整成就列表）
+    }
+
+    _checkSnowStand(dt) {
+        // 雪地区域 z<-60，蛋静止不动累计 10 秒
+        const p = this.player.position;
+        const inSnow = p.z < -60 && Math.abs(p.x) < 70;
+        const moving = Math.hypot(this.velocity.x, this.velocity.z) > 0.5;
+        if (inSnow && !moving && this.onGround) {
+            this._snowStandT = (this._snowStandT || 0) + dt;
+            if (this._snowStandT >= 10) this._unlockAchievement('snow_stand');
+        } else {
+            this._snowStandT = 0;
+        }
+    }
     _initWatering() {
         this.wateringDrops = [];
         this._wateringCooldown = 0;
@@ -2904,6 +3141,9 @@ export class Game3D {
     _doWatering() {
         if (this._wateringCooldown > 0) return;
         this._wateringCooldown = 0.5;
+        this._unlockAchievement('first_flower');
+        this._waterCount = (this._waterCount || 0) + 1;
+        if (this._waterCount >= 10) this._unlockAchievement('water_player');
         // 朝面前方向喷一束粒子
         const p = this.player.position;
         const a = this.player.rotation.y;
@@ -3014,6 +3254,8 @@ export class Game3D {
             const got = catches[Math.floor(Math.random() * catches.length)];
             this._showEasterBadge(`钓到了 ${got}`);
             this._playWin();
+            this._addToInventory(got);
+            this._unlockAchievement('first_fish');
             // 浮漂飞起来
             if (this._fishingFloat) {
                 this.scene.remove(this._fishingFloat);
@@ -3031,11 +3273,15 @@ export class Game3D {
         this.seasonIdx = 0;
         this.seasonTimer = 120;
         this._seasonChip = document.getElementById('game-season');
-        this._applySeason();
+        this._applySeason(true);  // 首次：不放烟花（避免开局卡）
     }
 
-    _applySeason() {
+    _applySeason(initial = false) {
         const s = this.seasons[this.seasonIdx];
+        if (this._seasonsSeen) {
+            this._seasonsSeen.add(s);
+            if (this._seasonsSeen.size === 4) this._unlockAchievement('all_seasons');
+        }
         if (this._seasonChip) {
             this._seasonChip.textContent = ({
                 spring: '🌸 春',
@@ -3052,7 +3298,7 @@ export class Game3D {
             winter: { ambient: 0xd8e8f5, fog: 0xe8eef5 },
         })[s];
         // 注意不要硬覆盖 _updateDayNight 的 fog 切换；这里只在切换瞬间提示视觉变化
-        this._launchFirework();   // 季节切换烟花
+        if (!initial) this._launchFirework();   // 季节切换烟花（首次不放）
     }
 
     _updateSeason(dt) {
@@ -3096,6 +3342,7 @@ export class Game3D {
             this._launchFirework();
             this._playWin();
             this._showEasterBadge('🦊 树后小狐狸发现！');
+            this._unlockAchievement('hidden_fox');
         }
     }
 
@@ -3149,6 +3396,7 @@ export class Game3D {
                 this.lighthouseNote.found = true;
                 this._playWin();
                 this._showEasterBadge('📜 守塔人留言！');
+                this._unlockAchievement('lighthouse_note');
             }
         }
     }
@@ -3179,6 +3427,7 @@ export class Game3D {
             setTimeout(() => this._launchFirework(), i * 350);
         }
         this._playWin();
+        this._unlockAchievement('konami');
         // 闪一下
         this.cameraTarget = this.cameraTarget || new THREE.Vector3();
     }
@@ -3287,6 +3536,7 @@ export class Game3D {
             // 第一次发现：彩虹一下
             this._tone(880, 0.15, 'sine', 0.06);
             this._tone(1320, 0.15, 'sine', 0.05, 0.07);
+            this._unlockAchievement('into_igloo');
         }
         if (this.penguin.discovered) {
             const opTarget = dist < 3.5 ? Math.min(1, (3.5 - dist) / 0.7) : 0;
@@ -3354,6 +3604,7 @@ export class Game3D {
             this._playWin();
             // 给一个长存 chip 提示
             this._showEasterBadge('💎 桥下宝藏发现！');
+            this._unlockAchievement('bridge_treasure');
         }
     }
 
@@ -3372,6 +3623,7 @@ export class Game3D {
             this._launchFirework();
             this._playWin();
             this._showEasterBadge('✨ 喷泉许愿成功！');
+            this._unlockAchievement('fountain_wish');
         }
         if (this._wishGlow > 0) {
             this._wishGlow -= dt;
@@ -3451,6 +3703,7 @@ export class Game3D {
             this._launchFirework();
             this._playWin();
             this._showEasterBadge('🧚 村屋后小精灵！');
+            this._unlockAchievement('backyard_gold');
         }
     }
 
@@ -3694,8 +3947,9 @@ export class Game3D {
         walls.forEach(w => this.obstacles.push(w));
 
         this.houses.push({
-            min: new THREE.Vector3(x - W/2 + wallT, 0, z - D/2 + wallT),
-            max: new THREE.Vector3(x + W/2 - wallT, H, z + D/2 - wallT),
+            // inside 检测放宽到外墙边（不再减 wallT）：站门口就算"屋内"
+            min: new THREE.Vector3(x - W/2, 0, z - D/2),
+            max: new THREE.Vector3(x + W/2, H, z + D/2),
             fadeables,
             currentOpacity: 1,
         });
@@ -3863,6 +4117,7 @@ export class Game3D {
             this.lightningTimer = 8 + Math.random() * 14;
             // 雷声：低频降调
             this._playThunder();
+            this._unlockAchievement('see_lightning');
         }
         if (this.lightningFlash > 0) {
             this.lightningFlash = Math.max(0, this.lightningFlash - dt * 4);
@@ -4044,6 +4299,7 @@ export class Game3D {
             if (!Ctx) return;
             this.audioCtx = new Ctx();
             this.audioReady = true;
+            this._startBGM();
         } catch (e) {}
     }
 
@@ -4835,16 +5091,20 @@ export class Game3D {
             const angle = (i / 14) * Math.PI * 2;
             const radius = 90 + Math.random() * 15;
             const size = 8 + Math.random() * 6;
+            const cx = Math.cos(angle) * radius;
+            const cz = Math.sin(angle) * radius;
             const hill = new THREE.Mesh(
-                new THREE.SphereGeometry(size, 12, 8),
+                new THREE.SphereGeometry(size, 10, 6),
                 Math.random() > 0.5 ? hillMat : hillMatFar
             );
-            hill.position.set(
-                Math.cos(angle) * radius,
-                -size * 0.4,
-                Math.sin(angle) * radius
-            );
+            hill.position.set(cx, -size * 0.4, cz);
             this.scene.add(hill);
+            // 注册碰撞 AABB（略小于可视尺寸，蛋会在山脚被推回，不再融合进去）
+            const r = size * 0.78;
+            this.obstacles.push({
+                min: new THREE.Vector3(cx - r, 0, cz - r),
+                max: new THREE.Vector3(cx + r, size * 0.6, cz + r),
+            });
         }
     }
 
@@ -5129,6 +5389,7 @@ export class Game3D {
             // 互动键
             if (e.code === 'KeyE') { e.preventDefault(); this._doWatering(); }
             if (e.code === 'KeyF') { e.preventDefault(); this._toggleFishing(); }
+            if (e.code === 'KeyM') { e.preventDefault(); this._toggleBGM(); }
             if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
                 e.preventDefault();
             }
@@ -5144,7 +5405,7 @@ export class Game3D {
         this.hintEl = document.getElementById('game-hint');
         if (this.hintEl) {
             this.hintEl.style.display = 'block';
-            this.hintEl.textContent = 'WASD 走 · 空格跳 · E 浇花 · F 钓鱼 · C 换造型 · 1/2/3/4 切时段';
+            this.hintEl.textContent = 'WASD 走 · 空格跳 · E 浇花 · F 钓鱼 · M 音乐 · C 换造型 · 1/2/3/4 切时段';
         }
     }
 
@@ -5212,10 +5473,12 @@ export class Game3D {
         this._updateGiantMode(dt);
         this._updateFishing(dt);
         this._updateSeason(dt);
+        this._updateBGM(dt);
         if (this._wateringCooldown > 0) this._wateringCooldown -= dt;
         if (!this.dying && !this.won) {
             this._checkHiddenFox();
             this._checkLighthouseNote();
+            this._checkSnowStand(dt);
         }
         // 风车撞飞冷却
         if (this._knockbackCooldown > 0) {
@@ -5266,6 +5529,7 @@ export class Game3D {
             this.playerVy = JUMP_SPEED;
             this.onGround = false;
             this._playJump();
+            this._unlockAchievement?.('first_jump');
         }
 
         this.playerVy -= GRAVITY * dt;
@@ -5453,10 +5717,46 @@ export class Game3D {
     }
 
     _updateCamera() {
-        // 关键反晕：相机刚性跟随，不再 lerp 漂移（眼睛不再"追"画面）
+        // 室外：高俯瞰跟随（刚性，不晕车）
+        // 室内：第一人称——相机进入蛋"眼睛"位置，朝蛋朝向看
+        // 切换：插值 0→1 让两套相机姿态平滑混合
+        if (this._fpsT === undefined) {
+            this._fpsT = 0;
+            this._tmpCam = new THREE.Vector3();
+            this._tmpLook = new THREE.Vector3();
+            this._tmpFwd = new THREE.Vector3();
+        }
+        const target = this.isInsideHouse ? 1 : 0;
+        this._fpsT += (target - this._fpsT) * 0.18;
+
         const p = this.player.position;
-        this.camera.position.set(p.x, p.y + 11, p.z + 13);
-        this.camera.lookAt(p.x, p.y + 0.4, p.z);
+        const angle = this.player.rotation.y;
+        this._tmpFwd.set(Math.sin(angle), 0, -Math.cos(angle));
+
+        // 室外姿态
+        const outX = p.x,            outY = p.y + 11,   outZ = p.z + 13;
+        const outLX = p.x,           outLY = p.y + 0.4, outLZ = p.z;
+        // FPS 姿态：相机在蛋脸前方（穿过描边壳到外面），蛋的眼睛高度，看向 10m 远
+        // fwd*0.8 = 蛋身体半径 0.6 + 一点点缓冲，避免在身体/描边内部
+        const fpsX = p.x + this._tmpFwd.x * 0.8,
+              fpsY = p.y + 0.33,
+              fpsZ = p.z + this._tmpFwd.z * 0.8;
+        const fpsLX = p.x + this._tmpFwd.x * 10;
+        const fpsLY = p.y + 0.30;
+        const fpsLZ = p.z + this._tmpFwd.z * 10;
+
+        const t = this._fpsT;
+        this.camera.position.set(
+            outX * (1 - t) + fpsX * t,
+            outY * (1 - t) + fpsY * t,
+            outZ * (1 - t) + fpsZ * t
+        );
+        this._tmpLook.set(
+            outLX * (1 - t) + fpsLX * t,
+            outLY * (1 - t) + fpsLY * t,
+            outLZ * (1 - t) + fpsLZ * t
+        );
+        this.camera.lookAt(this._tmpLook);
     }
 
     _triggerWin(goal) {
@@ -5465,6 +5765,9 @@ export class Game3D {
         this.won = true;
         this._saveWonGoal(goal.name);
         this._playWin();
+        if (this._loadWonGoals().length >= this.goals.length) {
+            this._unlockAchievement('all_goals');
+        }
         // 星暗化，提示"已通过"
         goal.star.material.emissiveIntensity = 0.4;
         goal.star.material.color.setHex(0xeed694);

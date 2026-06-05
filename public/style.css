@@ -98,6 +98,19 @@ body {
     z-index: 5;
 }
 
+#game-achievements {
+    position: fixed;
+    top: 186px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
 #game-status {
     position: fixed;
     top: 50%;
@@ -235,23 +248,18 @@ body {
     border-radius: 0 0 30px 30px;
 }
 
-.accessory { position: absolute; left: 50%; transform: translateX(-50%); top: -22px; }
-.accessory.acc-none { display: none; }
-.accessory.acc-bow {
-    width: 50px; height: 28px; background: #ff3a78;
-    clip-path: polygon(0% 0%, 40% 50%, 0% 100%, 60% 100%, 100% 50%, 60% 0%);
-    border-radius: 6px;
+.accessory {
+    position: absolute; left: 50%; top: -42px;
+    transform: translateX(-50%);
+    font-size: 48px;
+    line-height: 1;
+    text-align: center;
+    width: auto;
 }
-.accessory.acc-leaf {
-    width: 30px; height: 32px; background: #86d96a;
-    border-radius: 60% 60% 60% 60% / 80% 80% 30% 30%;
-    border: 2px solid #4a8a3a;
-}
-.accessory.acc-crown {
-    width: 60px; height: 30px; background: #ffd700;
-    clip-path: polygon(0% 100%, 15% 30%, 30% 70%, 50% 0%, 70% 70%, 85% 30%, 100% 100%);
-    border-bottom: 4px solid #b89000;
-}
+.accessory.acc-none::after { content: ''; }
+.accessory.acc-bow::after { content: '🎀'; }
+.accessory.acc-leaf::after { content: '🌱'; }
+.accessory.acc-crown::after { content: '👑'; }
 
 .row {
     margin: 16px 0;
