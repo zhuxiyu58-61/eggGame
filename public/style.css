@@ -33,6 +33,45 @@ body {
     display: none;
 }
 
+#game-time {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
+#game-weather {
+    position: fixed;
+    top: 50px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
+#game-stars {
+    position: fixed;
+    top: 84px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
 #game-status {
     position: fixed;
     top: 50%;
@@ -56,6 +95,16 @@ body {
     color: #666;
     font-weight: normal;
     margin-top: 12px;
+}
+
+#sleep-overlay {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    opacity: 0;
+    z-index: 50;
+    pointer-events: none;
+    transition: opacity 0.05s linear;
 }
 
 /* ===== 捏脸面板 ===== */
