@@ -72,6 +72,32 @@ body {
     z-index: 5;
 }
 
+#game-greet {
+    position: fixed;
+    top: 118px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
+#game-season {
+    position: fixed;
+    top: 152px;
+    right: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+}
+
 #game-status {
     position: fixed;
     top: 50%;

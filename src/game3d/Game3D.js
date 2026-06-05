@@ -236,9 +236,81 @@ export class Game3D {
         this._onResize = this._onResize.bind(this);
         window.addEventListener('resize', this._onResize);
 
+        // 关键：预编译所有 shader + 上传所有 texture，消除首次走动时的编译卡顿
+        this._warmup();
+
         this.clock = new THREE.Clock();
         this._tick = this._tick.bind(this);
         this.animId = requestAnimationFrame(this._tick);
+    }
+
+    _warmup() {
+        // 1) 预生成每类"动态粒子"各一颗（强制其 shader 进入编译队列）
+        const dummies = [];
+        const addDummy = (mesh) => {
+            mesh.position.set(0, -100, 0);  // 远离视野
+            this.scene.add(mesh);
+            dummies.push(mesh);
+        };
+        // 落地粒子
+        addDummy(new THREE.Mesh(
+            new THREE.SphereGeometry(0.05, 6, 4),
+            new THREE.MeshBasicMaterial({ color: 0xa8e3a8, transparent: true, opacity: 0.8 })
+        ));
+        // 烟囱烟
+        addDummy(new THREE.Mesh(
+            new THREE.SphereGeometry(0.18, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0xe8e8ec, transparent: true, opacity: 0.7, depthWrite: false })
+        ));
+        // 烟花/拾取星（MeshStandardMaterial + emissive）
+        addDummy(new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.22),
+            new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.5 })
+        ));
+        // 脚印（CircleGeometry transparent）
+        const fp = new THREE.Mesh(
+            new THREE.CircleGeometry(0.18, 12),
+            new THREE.MeshBasicMaterial({ color: 0x4a8a3a, transparent: true, opacity: 0.4, depthWrite: false })
+        );
+        fp.rotation.x = -Math.PI / 2;
+        addDummy(fp);
+        // 流星头/尾
+        addDummy(new THREE.Mesh(
+            new THREE.SphereGeometry(0.4, 12, 10),
+            new THREE.MeshStandardMaterial({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
+        ));
+
+        // 2) 多帧渲染（每帧轻微转一下相机角度，让 frustum 覆盖到更多东西）
+        const origPos = this.camera.position.clone();
+        const origRot = this.camera.rotation.clone();
+        for (let i = 0; i < 4; i++) {
+            this.camera.position.set(20 - i * 13, 12, 13 + i * 7);
+            this.camera.lookAt(0, 0, 0);
+            this.renderer.compile(this.scene, this.camera);
+            try {
+                if (this.composer) this.composer.render();
+                else this.renderer.render(this.scene, this.camera);
+            } catch (e) {}
+        }
+        this.camera.position.copy(origPos);
+        this.camera.rotation.copy(origRot);
+
+        // 3) 上传所有 CanvasTexture
+        this.scene.traverse(obj => {
+            if (obj.material) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach(m => {
+                    if (m.map && m.map.isTexture) this.renderer.initTexture(m.map);
+                });
+            }
+        });
+
+        // 4) 清掉 dummies
+        dummies.forEach(d => {
+            this.scene.remove(d);
+            d.geometry.dispose();
+            d.material.dispose();
+        });
     }
 
     _initThree() {
@@ -444,6 +516,27 @@ export class Game3D {
         this._buildStreamAndBridge();
         this._initWind();
         this._addRooftopCat();
+        this._buildSnowBiome();
+        this._buildFishingBoat();
+        this._buildLighthouse();
+        this._initGreetQuest();
+        this._initRainbow();
+        this._initSwimming();
+        this._initShootingStars();
+        this._buildGiantWindmill();
+        // ===== 隐藏彩蛋 =====
+        this._initKonami();
+        this._addIglooPenguin();
+        this._addBridgeTreasure();
+        this._initFountainWish();
+        this._addBackyardGold();
+        // ===== 互动 & 季节 =====
+        this._initWatering();
+        this._initFishing();
+        this._initSeasons();
+        // ===== 新彩蛋 =====
+        this._addTreeHiddenEmoji();
+        this._addLighthouseNote();
 
         // 通关标记应用到已完成的路 + 全通后解锁伙伴
         this._applyWonGoals();
@@ -1436,8 +1529,14 @@ export class Game3D {
 
     _updateSnowmen() {
         if (!this.snowmen) return;
-        const visible = this.weather === 'snow';
-        this.snowmen.forEach(s => s.visible = visible);
+        const weatherSnow = this.weather === 'snow';
+        this.snowmen.forEach(s => {
+            if (s.userData && s.userData.permanent) {
+                s.visible = true;  // 雪地里永驻的不受天气控制
+            } else {
+                s.visible = weatherSnow;
+            }
+        });
     }
 
     _buildFence() {
@@ -2204,6 +2303,1188 @@ export class Game3D {
         }
     }
 
+    _buildSnowBiome() {
+        // 北金星后面 (z < -60) 进入雪地，白色地+白顶松+冰湖+冰屋
+        const snowGround = new THREE.Mesh(
+            new THREE.PlaneGeometry(160, 60),
+            new THREE.MeshToonMaterial({ color: 0xf0f4f8 })
+        );
+        snowGround.rotation.x = -Math.PI / 2;
+        snowGround.position.set(0, 0.03, -85);
+        snowGround.receiveShadow = true;
+        this.scene.add(snowGround);
+
+        // 雪地边缘渐变（深色一点的雪做过渡）
+        const edge = new THREE.Mesh(
+            new THREE.PlaneGeometry(160, 6),
+            new THREE.MeshToonMaterial({ color: 0xd8e0e8, transparent: true, opacity: 0.7 })
+        );
+        edge.rotation.x = -Math.PI / 2;
+        edge.position.set(0, 0.035, -58);
+        this.scene.add(edge);
+
+        // 白顶松树（圆锥三层叠）— 散布
+        const inSnow = (x, z) => x > -70 && x < 70 && z < -62 && z > -110;
+        for (let i = 0; i < 28; i++) {
+            const x = (Math.random() - 0.5) * 140;
+            const z = -65 - Math.random() * 38;
+            if (!inSnow(x, z)) continue;
+            this._addPineTree(x, z);
+        }
+
+        // 冰湖（半径 7 的椭圆）
+        const icePond = new THREE.Mesh(
+            new THREE.CircleGeometry(7, 32),
+            new THREE.MeshStandardMaterial({
+                color: 0xb8e0f0, metalness: 0.3, roughness: 0.1,
+                transparent: true, opacity: 0.85,
+            })
+        );
+        icePond.rotation.x = -Math.PI / 2;
+        icePond.position.set(-30, 0.06, -90);
+        this.scene.add(icePond);
+        const iceRim = new THREE.Mesh(
+            new THREE.RingGeometry(7, 7.6, 32),
+            new THREE.MeshToonMaterial({ color: 0xa0c0d0 })
+        );
+        iceRim.rotation.x = -Math.PI / 2;
+        iceRim.position.set(-30, 0.05, -90);
+        this.scene.add(iceRim);
+
+        // 冰屋（白色半球+黑洞口）
+        const igloo = new THREE.Group();
+        const dome = new THREE.Mesh(
+            new THREE.SphereGeometry(2.0, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+            new THREE.MeshToonMaterial({ color: 0xf5f8fc })
+        );
+        dome.position.y = 0;
+        dome.castShadow = true;
+        addOutline(dome, 0.025);
+        igloo.add(dome);
+        // 砖纹（用矮圆柱叠几圈）
+        for (let r = 0; r < 3; r++) {
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(2.0 - r * 0.6, 0.05, 6, 24),
+                new THREE.MeshBasicMaterial({ color: 0xd0d8e0 })
+            );
+            ring.position.y = 0.4 + r * 0.55;
+            ring.rotation.x = Math.PI / 2;
+            igloo.add(ring);
+        }
+        // 入口（小拱）
+        const entrance = new THREE.Mesh(
+            new THREE.BoxGeometry(0.9, 0.9, 0.7),
+            new THREE.MeshToonMaterial({ color: 0xe8eef5 })
+        );
+        entrance.position.set(0, 0.45, 1.6);
+        addOutline(entrance, 0.04);
+        igloo.add(entrance);
+        const hole = new THREE.Mesh(
+            new THREE.BoxGeometry(0.5, 0.55, 0.4),
+            new THREE.MeshBasicMaterial({ color: 0x1a1a2e })
+        );
+        hole.position.set(0, 0.30, 1.85);
+        igloo.add(hole);
+
+        igloo.position.set(30, 0, -80);
+        igloo.rotation.y = -0.2;
+        this.scene.add(igloo);
+        // 不做障碍，蛋可以走过去（屋是装饰）
+
+        // 几个雪人（永驻雪地，跟天气雪人不同）
+        for (const sp of [[15, -75], [-15, -95], [40, -100]]) {
+            this._addSnowman(sp[0], sp[1]);
+            // _addSnowman 会把 group 加到 this.snowmen，默认 visible=false
+            // 把刚加的设为永久可见
+            const justAdded = this.snowmen[this.snowmen.length - 1];
+            justAdded.visible = true;
+            justAdded.userData.permanent = true;  // 标记雪天切换时不要被关
+        }
+    }
+
+    _addPineTree(x, z) {
+        const group = new THREE.Group();
+        const trunkH = 1.5 + Math.random() * 0.4;
+        const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.18, 0.22, trunkH, 8),
+            new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+        );
+        trunk.position.y = trunkH / 2;
+        trunk.castShadow = true;
+        addOutline(trunk, 0.05);
+        group.add(trunk);
+        // 3 层圆锥（深绿+白顶）
+        const greenMat = new THREE.MeshToonMaterial({ color: 0x2a6a3a });
+        const snowMat = new THREE.MeshToonMaterial({ color: 0xffffff });
+        const layers = 3;
+        let y = trunkH;
+        for (let i = layers - 1; i >= 0; i--) {
+            const r = 0.55 + i * 0.30;
+            const h = 0.85;
+            const cone = new THREE.Mesh(
+                new THREE.ConeGeometry(r, h, 10),
+                greenMat
+            );
+            cone.position.y = y + h / 2;
+            cone.castShadow = true;
+            addOutline(cone, 0.04);
+            group.add(cone);
+            // 雪盖：略薄一层在锥体上方
+            const snowCap = new THREE.Mesh(
+                new THREE.ConeGeometry(r * 0.45, h * 0.35, 10),
+                snowMat
+            );
+            snowCap.position.y = y + h * 0.85;
+            group.add(snowCap);
+            y += h * 0.8;
+        }
+        group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI * 2;
+        group.scale.setScalar(0.9 + Math.random() * 0.4);
+        this.scene.add(group);
+    }
+
+    _buildFishingBoat() {
+        const group = new THREE.Group();
+        // 船身（扁椭圆 = 半圆柱躺平）
+        const hull = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.7, 0.9, 2.5, 12, 1, false, 0, Math.PI),
+            new THREE.MeshToonMaterial({ color: 0x8a5a2e, side: THREE.DoubleSide })
+        );
+        hull.rotation.z = Math.PI / 2;
+        hull.rotation.x = Math.PI / 2;
+        hull.position.y = 0.3;
+        hull.castShadow = true;
+        addOutline(hull, 0.04);
+        group.add(hull);
+        // 船桨
+        const oarMat = new THREE.MeshToonMaterial({ color: 0x6a3a1a });
+        const oar = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.4, 6), oarMat);
+        oar.position.set(0.8, 0.5, -0.4);
+        oar.rotation.z = Math.PI / 4;
+        addOutline(oar, 0.05);
+        group.add(oar);
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.45), oarMat);
+        blade.position.set(1.3, 0.0, -0.95);
+        group.add(blade);
+        // 小渔夫蛋（坐船里）
+        const fisherman = new THREE.Mesh(
+            new THREE.SphereGeometry(0.30, 16, 12),
+            new THREE.MeshToonMaterial({ color: 0xff9a66 })
+        );
+        fisherman.scale.set(1, 1.25, 1);
+        fisherman.position.y = 0.65;
+        fisherman.castShadow = true;
+        addOutline(fisherman, 0.06);
+        group.add(fisherman);
+        // 渔夫帽（小圆锥）
+        const hat = new THREE.Mesh(
+            new THREE.ConeGeometry(0.32, 0.20, 12),
+            new THREE.MeshToonMaterial({ color: 0xf5e6c0 })
+        );
+        hat.scale.y = 0.4;
+        hat.position.y = 1.02;
+        addOutline(hat, 0.05);
+        group.add(hat);
+        // 钓鱼竿
+        const rod = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.015, 0.02, 1.5, 4),
+            new THREE.MeshBasicMaterial({ color: 0x2c2c54 })
+        );
+        rod.position.set(0.4, 1.0, 0.7);
+        rod.rotation.x = -0.5;
+        rod.rotation.z = 0.3;
+        group.add(rod);
+        // 钓线（细竖线）
+        const line = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.005, 0.005, 0.8, 4),
+            new THREE.MeshBasicMaterial({ color: 0x2c2c54 })
+        );
+        line.position.set(0.9, 0.4, 1.4);
+        group.add(line);
+
+        group.position.set(48, 0.4, -42);  // 湖中央
+        this.scene.add(group);
+        this.fishingBoat = group;
+    }
+
+    _updateFishingBoat() {
+        if (!this.fishingBoat) return;
+        const t = performance.now() * 0.001;
+        this.fishingBoat.position.y = 0.4 + Math.sin(t * 1.2) * 0.06;
+        this.fishingBoat.rotation.z = Math.sin(t * 0.8) * 0.04;
+        this.fishingBoat.rotation.y = Math.sin(t * 0.3) * 0.15;
+    }
+
+    _buildLighthouse() {
+        const group = new THREE.Group();
+        // 圆柱塔身（白红条纹用 6 个矮圆柱叠）
+        const segH = 1.6;
+        const segs = 8;
+        for (let i = 0; i < segs; i++) {
+            const isWhite = i % 2 === 0;
+            const seg = new THREE.Mesh(
+                new THREE.CylinderGeometry(1.0 - i * 0.05, 1.05 - i * 0.05, segH, 16),
+                new THREE.MeshToonMaterial({ color: isWhite ? 0xfafafa : 0xc83a3a })
+            );
+            seg.position.y = segH / 2 + i * segH;
+            seg.castShadow = true;
+            if (i === 0 || i === segs - 1) addOutline(seg, 0.025);
+            group.add(seg);
+        }
+        const totalH = segs * segH;
+        // 灯室（玻璃围栏 + 圆顶）
+        const lampRoom = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.8, 0.85, 1.2, 12),
+            new THREE.MeshToonMaterial({ color: 0x2c2c54, transparent: true, opacity: 0.7 })
+        );
+        lampRoom.position.y = totalH + 0.6;
+        group.add(lampRoom);
+        // 灯
+        const lampBulb = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 16, 12),
+            new THREE.MeshStandardMaterial({
+                color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 1.5,
+            })
+        );
+        lampBulb.position.y = totalH + 0.6;
+        group.add(lampBulb);
+        // 圆顶
+        const dome = new THREE.Mesh(
+            new THREE.SphereGeometry(0.85, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+            new THREE.MeshToonMaterial({ color: 0xc83a3a })
+        );
+        dome.position.y = totalH + 1.3;
+        addOutline(dome, 0.04);
+        group.add(dome);
+        const tip = new THREE.Mesh(
+            new THREE.ConeGeometry(0.1, 0.5, 8),
+            new THREE.MeshToonMaterial({ color: 0xc83a3a })
+        );
+        tip.position.y = totalH + 1.9;
+        group.add(tip);
+
+        // 旋转扫光（SpotLight，spinning）
+        const beam = new THREE.SpotLight(0xfff099, 0, 35, Math.PI / 7, 0.4, 1);
+        beam.position.y = totalH + 0.6;
+        beam.target.position.set(10, totalH + 0.3, 0);
+        group.add(beam);
+        group.add(beam.target);
+
+        group.position.set(82, 0, 62);   // 远东南
+        this.scene.add(group);
+
+        this.lighthouseBulb = lampBulb;
+        this.lighthouseBeam = beam;
+        this.lighthouseTarget = beam.target;
+        this.lighthousePhase = 0;
+    }
+
+    _updateLighthouse(dt) {
+        if (!this.lighthouseBeam) return;
+        // 旋转扫光：target 绕灯塔转
+        this.lighthousePhase += dt * 0.8;
+        const r = 30;
+        this.lighthouseTarget.position.set(
+            Math.cos(this.lighthousePhase) * r,
+            -8,
+            Math.sin(this.lighthousePhase) * r
+        );
+        // 夜里点亮
+        const sh = Math.sin(this.dayPhase * Math.PI * 2 - Math.PI / 2);
+        const nightness = Math.max(0, -sh + 0.15) / 1.15;
+        this.lighthouseBeam.intensity = nightness * 4;
+        this.lighthouseBulb.material.emissiveIntensity = 0.5 + nightness * 2;
+    }
+
+    _initGreetQuest() {
+        this._greeted = new Set();
+        this._greetChip = document.getElementById('game-greet');
+        this._greetCelebrated = false;
+        if (this._greetChip) {
+            this._greetChip.textContent = `👋 打招呼 0/${this.npcs.length}`;
+        }
+    }
+
+    _checkGreets() {
+        if (!this.npcs || this._greetCelebrated) return;
+        this.npcs.forEach(n => {
+            if (this._greeted.has(n)) return;
+            if (n.bubble && n.bubble.material.opacity > 0.7) {
+                this._greeted.add(n);
+                if (this._greetChip) {
+                    this._greetChip.textContent = `👋 打招呼 ${this._greeted.size}/${this.npcs.length}`;
+                }
+                if (this._greeted.size >= this.npcs.length) {
+                    this._greetCelebrated = true;
+                    this._celebrateGreet();
+                }
+            }
+        });
+    }
+
+    _celebrateGreet() {
+        // 满 8/8 时给个奖励：右上角弹彩色发光 + 烟花一个
+        if (this._greetChip) {
+            this._greetChip.textContent = '🎉 全村好朋友！';
+            this._greetChip.style.background = 'linear-gradient(90deg, #ff66cc, #ffd700, #66ddff)';
+        }
+        this._launchFirework();
+        this._launchFirework();
+        // 拿星音效再来一遍庆贺
+        this._playWin();
+    }
+
+    _initRainbow() {
+        // 7 色同心 ring 拼一道弧
+        const colors = [0xff5050, 0xffa040, 0xffe066, 0x66ff66, 0x66aaff, 0x6660ff, 0xc060ff];
+        this.rainbowGroup = new THREE.Group();
+        for (let i = 0; i < 7; i++) {
+            const r = 35 + i * 0.7;
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(r, 0.35, 8, 64, Math.PI),
+                new THREE.MeshBasicMaterial({
+                    color: colors[i], transparent: true, opacity: 0,
+                    side: THREE.DoubleSide, fog: false,
+                })
+            );
+            this.rainbowGroup.add(ring);
+        }
+        // 半圆开口朝下，立在地面上方
+        this.rainbowGroup.rotation.z = 0;
+        this.rainbowGroup.position.set(0, 0, -50);
+        this.rainbowGroup.rotation.x = Math.PI / 2;
+        this.rainbowGroup.rotation.y = Math.PI;  // 朝向相机
+        this.scene.add(this.rainbowGroup);
+        this._rainbowOpacity = 0;
+        this._lastWeather = this.weather;
+    }
+
+    _updateRainbow(dt) {
+        if (!this.rainbowGroup) return;
+        // 检测雨→晴切换：触发彩虹
+        if (this._lastWeather === 'rain' && this.weather === 'sunny') {
+            this._rainbowOpacity = 1.0;
+        }
+        this._lastWeather = this.weather;
+        // 慢慢淡出
+        if (this._rainbowOpacity > 0) {
+            this._rainbowOpacity -= dt * 0.06;
+            if (this._rainbowOpacity < 0) this._rainbowOpacity = 0;
+        }
+        this.rainbowGroup.children.forEach(ring => {
+            ring.material.opacity = this._rainbowOpacity * 0.75;
+        });
+    }
+
+    _initSwimming() {
+        this.swimming = false;
+        this.lakeCenter = { x: 48, z: -42 };
+        this.lakeRadius = 7.5;
+        this.icePondCenter = { x: -30, z: -90 };
+        this.icePondRadius = 7;
+    }
+
+    _checkSwimming(dt) {
+        const p = this.player.position;
+        const dx = p.x - this.lakeCenter.x;
+        const dz = p.z - this.lakeCenter.z;
+        const distLake = Math.hypot(dx, dz);
+        const inLake = distLake < this.lakeRadius;
+
+        if (inLake && !this.swimming && this.player.position.y < 1.0) {
+            // 落水瞬间：溅水花
+            this.swimming = true;
+            this._splashWater(p.x, p.z);
+            this._tone(440, 0.15, 'sine', 0.06);
+        }
+        if (!inLake && this.swimming) {
+            this.swimming = false;
+            // 上岸恢复颜色
+            if (this.bodyMesh && !this._bodyColorWasWet) {
+                this.bodyMesh.material.color.setHex(this._bodyColorDry);
+            }
+        }
+
+        if (this.swimming) {
+            // 浮力：被水推上来 + 减弱重力
+            const surface = 0.5;
+            if (this.player.position.y < surface) {
+                this.playerVy += 12 * dt;
+            }
+            this.playerVy *= 0.85;  // 水阻
+            this.velocity.x *= 0.92;
+            this.velocity.z *= 0.92;
+            // 让蛋停在水面附近上下浮
+            if (this.player.position.y < 0.2) this.player.position.y = 0.2;
+            // 蓝调
+            if (this.bodyMesh) {
+                this.bodyMesh.material.color.setHex(darkenHex(this._bodyColorDry, 0.65));
+            }
+        }
+    }
+
+    _splashWater(x, z) {
+        for (let i = 0; i < 12; i++) {
+            const drop = new THREE.Mesh(
+                new THREE.SphereGeometry(0.08 + Math.random() * 0.05, 6, 4),
+                new THREE.MeshStandardMaterial({
+                    color: 0x88c8e8, transparent: true, opacity: 0.85,
+                })
+            );
+            const ang = (i / 12) * Math.PI * 2;
+            const sp = 2.5 + Math.random() * 1.5;
+            drop.userData = {
+                vx: Math.cos(ang) * sp,
+                vy: 3.5 + Math.random() * 1.5,
+                vz: Math.sin(ang) * sp,
+                life: 1.0,
+                full: 1.0,
+            };
+            drop.position.set(x, 0.5, z);
+            this.scene.add(drop);
+            this.landParticles.push(drop);
+        }
+    }
+
+    _checkIceSlide(dt) {
+        // 冰面打滑：速度衰减系数大幅降低（更滑）
+        const p = this.player.position;
+        const dx = p.x - this.icePondCenter.x;
+        const dz = p.z - this.icePondCenter.z;
+        const dist = Math.hypot(dx, dz);
+        const onIce = dist < this.icePondRadius && this.onGround;
+        if (onIce) {
+            // 把已加的减速冲销一部分（粗暴：直接给速度一个回归到目标的弱拉力）
+            this.velocity.x *= Math.pow(0.985, dt * 60);
+            this.velocity.z *= Math.pow(0.985, dt * 60);
+        }
+        this._onIce = onIce;
+    }
+
+    _initShootingStars() {
+        this.shootingStars = [];
+        this._meteorTimer = 12 + Math.random() * 10;
+    }
+
+    _updateShootingStars(dt) {
+        const sh = Math.sin(this.dayPhase * Math.PI * 2 - Math.PI / 2);
+        const isNight = sh < -0.05;
+        if (isNight) {
+            this._meteorTimer -= dt;
+            if (this._meteorTimer <= 0) {
+                this._meteorTimer = 15 + Math.random() * 25;
+                this._spawnMeteor();
+            }
+        }
+        // 现有流星更新
+        this.shootingStars = this.shootingStars.filter(m => {
+            m.life -= dt;
+            if (m.life <= 0) {
+                this.scene.remove(m.head);
+                m.head.geometry.dispose(); m.head.material.dispose();
+                if (m.trail) {
+                    this.scene.remove(m.trail);
+                    m.trail.geometry.dispose(); m.trail.material.dispose();
+                }
+                return false;
+            }
+            m.head.position.x += m.vx * dt;
+            m.head.position.y += m.vy * dt;
+            m.head.position.z += m.vz * dt;
+            // 拉尾巴朝运动方向
+            if (m.trail) {
+                m.trail.position.copy(m.head.position);
+                m.trail.lookAt(
+                    m.head.position.x - m.vx,
+                    m.head.position.y - m.vy,
+                    m.head.position.z - m.vz
+                );
+            }
+            const k = 1 - m.life / m.full;
+            m.head.material.opacity = 1 - k;
+            if (m.trail) m.trail.material.opacity = (1 - k) * 0.6;
+            return true;
+        });
+    }
+
+    _spawnMeteor() {
+        const startAng = Math.random() * Math.PI * 2;
+        const r = 80;
+        const startX = Math.cos(startAng) * r;
+        const startZ = Math.sin(startAng) * r;
+        const dirAng = startAng + Math.PI + (Math.random() - 0.5) * 0.4;
+        const speed = 30 + Math.random() * 10;
+        const head = new THREE.Mesh(
+            new THREE.SphereGeometry(0.4, 12, 10),
+            new THREE.MeshStandardMaterial({
+                color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3,
+                transparent: true, opacity: 1,
+            })
+        );
+        head.position.set(startX, 32 + Math.random() * 8, startZ);
+        this.scene.add(head);
+        // 尾迹（细长圆柱）
+        const trail = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.05, 0.3, 6.0, 8),
+            new THREE.MeshBasicMaterial({
+                color: 0xfff099, transparent: true, opacity: 0.6,
+            })
+        );
+        trail.position.copy(head.position);
+        this.scene.add(trail);
+        this.shootingStars.push({
+            head, trail,
+            vx: Math.cos(dirAng) * speed,
+            vy: -8 - Math.random() * 4,
+            vz: Math.sin(dirAng) * speed,
+            life: 2.0, full: 2.0,
+        });
+        // 流星音（短哨）
+        this._tone(2000, 0.4, 'sine', 0.03);
+        this._tone(1500, 0.4, 'sine', 0.025, 0.05);
+    }
+
+    _buildGiantWindmill() {
+        const group = new THREE.Group();
+        const towerH = 18;
+        // 高大圆柱白塔
+        const tower = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.2, 2.0, towerH, 14),
+            new THREE.MeshToonMaterial({ color: 0xfafafa })
+        );
+        tower.position.y = towerH / 2;
+        tower.castShadow = true;
+        addOutline(tower, 0.018);
+        group.add(tower);
+        // 顶部小舱
+        const nacelle = new THREE.Mesh(
+            new THREE.BoxGeometry(1.8, 1.0, 3.5),
+            new THREE.MeshToonMaterial({ color: 0xeae0c8 })
+        );
+        nacelle.position.y = towerH + 0.3;
+        addOutline(nacelle, 0.03);
+        group.add(nacelle);
+        // 3 长叶（绑到 hub）
+        const hub = new THREE.Group();
+        const bladeMat = new THREE.MeshToonMaterial({ color: 0xf5f5f5 });
+        for (let i = 0; i < 3; i++) {
+            const blade = new THREE.Mesh(
+                new THREE.BoxGeometry(0.45, 8.5, 0.18),
+                bladeMat
+            );
+            blade.position.y = 4.25;
+            addOutline(blade, 0.03);
+            const arm = new THREE.Group();
+            arm.rotation.z = (i / 3) * Math.PI * 2;
+            arm.add(blade);
+            hub.add(arm);
+        }
+        hub.position.set(0, towerH + 0.3, 1.8);
+        group.add(hub);
+        const center = new THREE.Mesh(
+            new THREE.SphereGeometry(0.4, 16, 12),
+            new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+        );
+        center.position.copy(hub.position);
+        group.add(center);
+
+        // 放远景地平线
+        group.position.set(-85, 0, 75);
+        this.scene.add(group);
+        this.animDecor.push({ type: 'giantWindmill', hub });
+    }
+
+    // ========= 浇花 =========
+    _initWatering() {
+        this.wateringDrops = [];
+        this._wateringCooldown = 0;
+    }
+
+    _doWatering() {
+        if (this._wateringCooldown > 0) return;
+        this._wateringCooldown = 0.5;
+        // 朝面前方向喷一束粒子
+        const p = this.player.position;
+        const a = this.player.rotation.y;
+        const fx = Math.sin(a), fz = -Math.cos(a);
+        for (let i = 0; i < 12; i++) {
+            const spread = (Math.random() - 0.5) * 0.6;
+            const drop = new THREE.Mesh(
+                new THREE.SphereGeometry(0.06 + Math.random() * 0.03, 6, 4),
+                new THREE.MeshStandardMaterial({
+                    color: 0x88c8e8, transparent: true, opacity: 0.85,
+                })
+            );
+            drop.userData = {
+                vx: (fx + spread) * (2.5 + Math.random()),
+                vy: 1.5 + Math.random() * 1.0,
+                vz: (fz + spread * 0.5) * (2.5 + Math.random()),
+                life: 0.8, full: 0.8,
+            };
+            drop.position.set(p.x + fx * 0.5, p.y + 0.3, p.z + fz * 0.5);
+            this.scene.add(drop);
+            this.landParticles.push(drop);
+        }
+        this._tone(800, 0.1, 'sine', 0.04);
+
+        // 3m 内的花朵触发闪+长大一下
+        if (this.flowers) {
+            this.flowers.forEach(f => {
+                const dx = p.x - f.x, dz = p.z - f.z;
+                if (Math.hypot(dx, dz) < 3) {
+                    f.animT = 0;
+                    // 临时把花瓣材质设 emissive
+                    f.group.children.forEach(c => {
+                        if (c.material && c.material.color &&
+                            !c.material._origEmiss && c.material.type !== 'MeshBasicMaterial') {
+                            c.material._origEmiss = c.material.emissive?.getHex() || 0;
+                            c.material.emissive?.setHex(0xffeebb);
+                            c.material.emissiveIntensity = 1.5;
+                            setTimeout(() => {
+                                if (c.material._origEmiss !== undefined) {
+                                    c.material.emissive?.setHex(c.material._origEmiss);
+                                    c.material.emissiveIntensity = 1;
+                                    delete c.material._origEmiss;
+                                }
+                            }, 800);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    // ========= 钓鱼 =========
+    _initFishing() {
+        this._fishingState = 'idle';  // idle / casting / waiting / bite
+        this._fishingTimer = 0;
+        this._fishingFloat = null;
+    }
+
+    _toggleFishing() {
+        const p = this.player.position;
+        // 必须靠近湖（半径 12 内）才能钓
+        const distLake = Math.hypot(p.x - 48, p.z - (-42));
+        const distIce = Math.hypot(p.x - (-30), p.z - (-90));
+        const nearLake = distLake < 12 || distIce < 11;
+        if (!nearLake) return;
+
+        if (this._fishingState === 'idle') {
+            // 抛竿
+            this._fishingState = 'waiting';
+            this._fishingTimer = 3 + Math.random() * 4;
+            this._showEasterBadge('🎣 抛竿中...等一下');
+            // 浮漂：一个红白小球在水面
+            const target = distLake < distIce ? { x: 48, z: -42 } : { x: -30, z: -90 };
+            this._fishingFloat = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18, 10, 8),
+                new THREE.MeshToonMaterial({ color: 0xc83a3a })
+            );
+            this._fishingFloat.position.set(
+                target.x + (Math.random() - 0.5) * 4,
+                0.35,
+                target.z + (Math.random() - 0.5) * 4
+            );
+            this.scene.add(this._fishingFloat);
+            this._tone(440, 0.15, 'sine', 0.05);
+        } else if (this._fishingState === 'waiting') {
+            // 取消
+            this._fishingState = 'idle';
+            if (this._fishingFloat) {
+                this.scene.remove(this._fishingFloat);
+                this._fishingFloat.geometry.dispose();
+                this._fishingFloat.material.dispose();
+                this._fishingFloat = null;
+            }
+        }
+    }
+
+    _updateFishing(dt) {
+        if (this._fishingState !== 'waiting') return;
+        this._fishingTimer -= dt;
+        // 浮漂上下晃
+        if (this._fishingFloat) {
+            const t = performance.now() * 0.001;
+            this._fishingFloat.position.y = 0.35 + Math.sin(t * 6) * 0.04;
+        }
+        if (this._fishingTimer <= 0) {
+            // 钓到东西
+            const catches = ['🐟', '🐠', '🦐', '🐡', '🌿', '🥾', '⭐'];
+            const got = catches[Math.floor(Math.random() * catches.length)];
+            this._showEasterBadge(`钓到了 ${got}`);
+            this._playWin();
+            // 浮漂飞起来
+            if (this._fishingFloat) {
+                this.scene.remove(this._fishingFloat);
+                this._fishingFloat.geometry.dispose();
+                this._fishingFloat.material.dispose();
+                this._fishingFloat = null;
+            }
+            this._fishingState = 'idle';
+        }
+    }
+
+    // ========= 季节 =========
+    _initSeasons() {
+        this.seasons = ['spring', 'summer', 'autumn', 'winter'];
+        this.seasonIdx = 0;
+        this.seasonTimer = 120;
+        this._seasonChip = document.getElementById('game-season');
+        this._applySeason();
+    }
+
+    _applySeason() {
+        const s = this.seasons[this.seasonIdx];
+        if (this._seasonChip) {
+            this._seasonChip.textContent = ({
+                spring: '🌸 春',
+                summer: '☀️ 夏',
+                autumn: '🍂 秋',
+                winter: '❄️ 冬',
+            })[s];
+        }
+        // 调环境光偏暖/冷 + 雾色
+        const tint = ({
+            spring: { ambient: 0xfff5e0, fog: 0xd8ecf5 },
+            summer: { ambient: 0xfff099, fog: 0xc8e6ff },
+            autumn: { ambient: 0xffd699, fog: 0xeec0a0 },
+            winter: { ambient: 0xd8e8f5, fog: 0xe8eef5 },
+        })[s];
+        // 注意不要硬覆盖 _updateDayNight 的 fog 切换；这里只在切换瞬间提示视觉变化
+        this._launchFirework();   // 季节切换烟花
+    }
+
+    _updateSeason(dt) {
+        this.seasonTimer -= dt;
+        if (this.seasonTimer <= 0) {
+            this.seasonTimer = 120;
+            this.seasonIdx = (this.seasonIdx + 1) % 4;
+            this._applySeason();
+        }
+    }
+
+    // ========= 新彩蛋 =========
+    _addTreeHiddenEmoji() {
+        // 选一棵树后面藏一只 🦊
+        const cv = document.createElement('canvas');
+        cv.width = 128; cv.height = 128;
+        const ctx = cv.getContext('2d');
+        ctx.font = '100px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🦊', 64, 64);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const fox = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+        }));
+        fox.scale.set(0.9, 0.9, 1);
+        // 藏在某棵树旁边
+        fox.position.set(-45, 0.5, 10);
+        this.scene.add(fox);
+        this.hiddenFox = { sprite: fox, found: false };
+    }
+
+    _checkHiddenFox() {
+        if (!this.hiddenFox || this.hiddenFox.found) return;
+        const p = this.player.position;
+        const dx = p.x - this.hiddenFox.sprite.position.x;
+        const dz = p.z - this.hiddenFox.sprite.position.z;
+        if (Math.hypot(dx, dz) < 2.5) {
+            this.hiddenFox.found = true;
+            this._launchFirework();
+            this._playWin();
+            this._showEasterBadge('🦊 树后小狐狸发现！');
+        }
+    }
+
+    _addLighthouseNote() {
+        // 灯塔旁边放一张"小纸条"sprite，靠近发现
+        const cv = document.createElement('canvas');
+        cv.width = 256; cv.height = 256;
+        const ctx = cv.getContext('2d');
+        ctx.fillStyle = '#fafad2';
+        if (ctx.roundRect) {
+            ctx.beginPath(); ctx.roundRect(10, 10, 236, 236, 14); ctx.fill();
+        } else {
+            ctx.fillRect(10, 10, 236, 236);
+        }
+        ctx.strokeStyle = '#8a5a2e';
+        ctx.lineWidth = 4;
+        if (ctx.roundRect) {
+            ctx.beginPath(); ctx.roundRect(10, 10, 236, 236, 14); ctx.stroke();
+        } else {
+            ctx.strokeRect(10, 10, 236, 236);
+        }
+        ctx.fillStyle = '#2c2c54';
+        ctx.font = 'bold 32px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('守塔人留', 128, 90);
+        ctx.font = '24px "Microsoft YaHei", sans-serif';
+        ctx.fillText('远方有座岛', 128, 140);
+        ctx.fillText('那是后续故事…', 128, 178);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const note = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+        }));
+        note.scale.set(1.4, 1.4, 1);
+        note.position.set(82, 1.0, 64); // 灯塔底
+        note.visible = false;
+        this.scene.add(note);
+        this.lighthouseNote = { sprite: note, found: false };
+    }
+
+    _checkLighthouseNote() {
+        if (!this.lighthouseNote || this.lighthouseNote.found) return;
+        const p = this.player.position;
+        const dx = p.x - 82;
+        const dz = p.z - 62;
+        const dist = Math.hypot(dx, dz);
+        if (dist < 4) {
+            this.lighthouseNote.sprite.visible = true;
+            if (dist < 2.5 && !this.lighthouseNote.found) {
+                this.lighthouseNote.found = true;
+                this._playWin();
+                this._showEasterBadge('📜 守塔人留言！');
+            }
+        }
+    }
+
+    // ========= 彩蛋区 =========
+    _initKonami() {
+        this._konamiSeq = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','KeyB','KeyA'];
+        this._konamiProgress = 0;
+        this._giantMode = 0;
+    }
+
+    _onKonamiKey(code) {
+        if (code === this._konamiSeq[this._konamiProgress]) {
+            this._konamiProgress++;
+            if (this._konamiProgress >= this._konamiSeq.length) {
+                this._konamiProgress = 0;
+                this._triggerGiantMode();
+            }
+        } else {
+            this._konamiProgress = (code === this._konamiSeq[0]) ? 1 : 0;
+        }
+    }
+
+    _triggerGiantMode() {
+        this._giantMode = 12;
+        // 一道大烟花庆贺
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => this._launchFirework(), i * 350);
+        }
+        this._playWin();
+        // 闪一下
+        this.cameraTarget = this.cameraTarget || new THREE.Vector3();
+    }
+
+    _updateGiantMode(dt) {
+        // 巨化期间蛋大 3 倍
+        if (this._giantMode > 0) {
+            this._giantMode -= dt;
+            this.player.scale.setScalar(3);
+        } else if (this.player.scale.x > 1.01) {
+            // 平滑回归
+            const s = this.player.scale.x;
+            const ns = s + (1 - s) * 4 * dt;
+            this.player.scale.setScalar(ns);
+        }
+    }
+
+    _addIglooPenguin() {
+        // 冰屋内坐一只小企鹅（默认隐藏，蛋走近冰屋入口才显形）
+        const group = new THREE.Group();
+        // 身体（黑色椭球）
+        const body = new THREE.Mesh(
+            new THREE.SphereGeometry(0.30, 16, 12),
+            new THREE.MeshToonMaterial({ color: 0x1a1a2e })
+        );
+        body.scale.set(0.9, 1.2, 0.9);
+        body.position.y = 0.36;
+        body.castShadow = true;
+        addOutline(body, 0.05);
+        group.add(body);
+        // 肚白
+        const belly = new THREE.Mesh(
+            new THREE.SphereGeometry(0.22, 14, 10),
+            new THREE.MeshToonMaterial({ color: 0xffffff })
+        );
+        belly.scale.set(0.8, 1.1, 0.4);
+        belly.position.set(0, 0.34, -0.16);
+        group.add(belly);
+        // 头（小一点）
+        const head = new THREE.Mesh(
+            new THREE.SphereGeometry(0.18, 14, 10),
+            new THREE.MeshToonMaterial({ color: 0x1a1a2e })
+        );
+        head.position.set(0, 0.72, -0.05);
+        head.castShadow = true;
+        addOutline(head, 0.05);
+        group.add(head);
+        // 眼睛
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(
+                new THREE.SphereGeometry(0.025, 6, 4),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            eye.position.set(sx * 0.06, 0.74, -0.18);
+            group.add(eye);
+            const pupil = new THREE.Mesh(
+                new THREE.SphereGeometry(0.012, 6, 4),
+                new THREE.MeshBasicMaterial({ color: 0x000000 })
+            );
+            pupil.position.set(sx * 0.06, 0.74, -0.20);
+            group.add(pupil);
+        }
+        // 喙
+        const beak = new THREE.Mesh(
+            new THREE.ConeGeometry(0.05, 0.12, 6),
+            new THREE.MeshToonMaterial({ color: 0xff8c42 })
+        );
+        beak.position.set(0, 0.68, -0.22);
+        beak.rotation.x = -Math.PI / 2;
+        group.add(beak);
+        // 翅膀
+        for (const sx of [-1, 1]) {
+            const wing = new THREE.Mesh(
+                new THREE.SphereGeometry(0.10, 8, 6),
+                new THREE.MeshToonMaterial({ color: 0x1a1a2e })
+            );
+            wing.scale.set(0.5, 1.4, 0.3);
+            wing.position.set(sx * 0.22, 0.36, 0);
+            group.add(wing);
+        }
+        // 气泡
+        const bTex = makeBubbleTexture('嗨！我住冰屋里');
+        const bubble = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: bTex, depthWrite: false, transparent: true, opacity: 0,
+        }));
+        bubble.scale.set(3.2, 0.95, 1);
+        bubble.position.y = 1.8;
+        group.add(bubble);
+
+        group.position.set(30, 0, -80);  // 冰屋位置
+        group.visible = false;
+        this.scene.add(group);
+        this.penguin = { group, bubble, discovered: false };
+    }
+
+    _checkPenguin() {
+        if (!this.penguin) return;
+        const p = this.player.position;
+        // 冰屋入口范围
+        const dx = p.x - 30;
+        const dz = p.z - 78;  // 入口比中心略偏 +Z
+        const dist = Math.hypot(dx, dz);
+        if (dist < 4 && !this.penguin.discovered) {
+            this.penguin.discovered = true;
+            this.penguin.group.visible = true;
+            // 第一次发现：彩虹一下
+            this._tone(880, 0.15, 'sine', 0.06);
+            this._tone(1320, 0.15, 'sine', 0.05, 0.07);
+        }
+        if (this.penguin.discovered) {
+            const opTarget = dist < 3.5 ? Math.min(1, (3.5 - dist) / 0.7) : 0;
+            this.penguin.bubble.material.opacity += (opTarget - this.penguin.bubble.material.opacity) * 0.15;
+        }
+    }
+
+    _addBridgeTreasure() {
+        // 桥下藏 1 个 emoji 宝箱 + 3 颗大金币
+        const group = new THREE.Group();
+        // 宝箱（emoji）
+        const cv = document.createElement('canvas');
+        cv.width = 128; cv.height = 128;
+        const ctx = cv.getContext('2d');
+        ctx.font = '100px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('💎', 64, 64);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const chest = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+        }));
+        chest.scale.set(0.9, 0.9, 1);
+        chest.position.set(0, 0.35, 0);
+        group.add(chest);
+        // 3 颗大金币（环绕宝石）
+        for (let i = 0; i < 3; i++) {
+            const ang = (i / 3) * Math.PI * 2;
+            const coin = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.18, 0.18, 0.06, 16),
+                new THREE.MeshStandardMaterial({
+                    color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.0,
+                    metalness: 0.8, roughness: 0.3,
+                })
+            );
+            coin.rotation.x = Math.PI / 2;
+            coin.position.set(Math.cos(ang) * 0.55, 0.1, Math.sin(ang) * 0.55);
+            group.add(coin);
+        }
+
+        // 放在桥下
+        group.position.set(45, 0, -16);
+        this.scene.add(group);
+        this.bridgeTreasure = { group, phase: 0, collected: false };
+    }
+
+    _updateBridgeTreasure(dt) {
+        if (!this.bridgeTreasure) return;
+        if (this.bridgeTreasure.collected) return;
+        // 旋转 + 浮动
+        this.bridgeTreasure.phase += dt;
+        this.bridgeTreasure.group.rotation.y = this.bridgeTreasure.phase * 0.8;
+        this.bridgeTreasure.group.position.y = Math.sin(this.bridgeTreasure.phase * 2) * 0.06;
+        // 收集
+        const p = this.player.position;
+        const dx = p.x - 45;
+        const dz = p.z + 16;
+        if (Math.hypot(dx, dz) < 1.5 && p.y < 0.6) {
+            this.bridgeTreasure.collected = true;
+            this.scene.remove(this.bridgeTreasure.group);
+            // 弹三道烟花 + 胜利和弦
+            this._launchFirework();
+            this._launchFirework();
+            this._playWin();
+            // 给一个长存 chip 提示
+            this._showEasterBadge('💎 桥下宝藏发现！');
+        }
+    }
+
+    _initFountainWish() {
+        this._fountainWished = false;
+        this._wishGlow = 0;
+    }
+
+    _checkFountainWish(dt) {
+        const p = this.player.position;
+        const dx = p.x, dz = p.z;
+        const inFountain = Math.hypot(dx, dz) < 1.3 && p.y < 1.5;
+        if (inFountain && !this._fountainWished) {
+            this._fountainWished = true;
+            this._wishGlow = 5.0;
+            this._launchFirework();
+            this._playWin();
+            this._showEasterBadge('✨ 喷泉许愿成功！');
+        }
+        if (this._wishGlow > 0) {
+            this._wishGlow -= dt;
+            // 喷泉水变彩
+            this.fountainParticles?.forEach(part => {
+                const k = (this._wishGlow * 8) % 6;
+                const colors = [0xff5050, 0xffa040, 0xffd700, 0x66ff66, 0x66aaff, 0xc060ff];
+                part.material.color.setHex(colors[Math.floor(k)]);
+                part.material.emissive?.setHex(colors[Math.floor(k)]);
+            });
+        }
+    }
+
+    _addBackyardGold() {
+        // 村屋后面 (z > 65) 藏几个堆叠金币 + 一个发光精灵
+        const group = new THREE.Group();
+        // 5 颗大金币叠起来
+        for (let i = 0; i < 5; i++) {
+            const coin = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.25, 0.25, 0.08, 18),
+                new THREE.MeshStandardMaterial({
+                    color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 0.8,
+                    metalness: 0.8, roughness: 0.3,
+                })
+            );
+            coin.position.y = 0.05 + i * 0.09;
+            coin.rotation.y = i * 0.4;
+            coin.castShadow = true;
+            group.add(coin);
+        }
+        // 散落几颗
+        for (let i = 0; i < 4; i++) {
+            const coin = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.18, 0.18, 0.05, 16),
+                new THREE.MeshStandardMaterial({
+                    color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 0.8,
+                })
+            );
+            coin.rotation.x = Math.PI / 2;
+            const ang = Math.random() * Math.PI * 2;
+            coin.position.set(Math.cos(ang) * 0.7, 0.04, Math.sin(ang) * 0.7);
+            group.add(coin);
+        }
+        // 发光小精灵（emissive 球+点光）
+        const sprite = new THREE.Mesh(
+            new THREE.SphereGeometry(0.20, 14, 10),
+            new THREE.MeshStandardMaterial({
+                color: 0xc060ff, emissive: 0xc060ff, emissiveIntensity: 2.5,
+            })
+        );
+        sprite.position.set(0, 0.9, 0);
+        group.add(sprite);
+        const light = new THREE.PointLight(0xc060ff, 1.5, 6, 1.5);
+        light.position.set(0, 0.9, 0);
+        group.add(light);
+
+        group.position.set(-10, 0, 67);  // 村屋后面
+        this.scene.add(group);
+        this.backyardGold = { group, sprite, collected: false, phase: 0 };
+    }
+
+    _updateBackyardGold(dt) {
+        if (!this.backyardGold || this.backyardGold.collected) return;
+        this.backyardGold.phase += dt;
+        // 精灵上下浮
+        this.backyardGold.sprite.position.y = 0.9 + Math.sin(this.backyardGold.phase * 2) * 0.15;
+        this.backyardGold.sprite.rotation.y = this.backyardGold.phase * 1.5;
+        // 收集
+        const p = this.player.position;
+        const dx = p.x + 10;
+        const dz = p.z - 67;
+        if (Math.hypot(dx, dz) < 1.8) {
+            this.backyardGold.collected = true;
+            this.scene.remove(this.backyardGold.group);
+            this._launchFirework();
+            this._launchFirework();
+            this._launchFirework();
+            this._playWin();
+            this._showEasterBadge('🧚 村屋后小精灵！');
+        }
+    }
+
+    _showEasterBadge(text) {
+        // 屏幕中央短暂弹一行金色文字
+        if (!this._easterEl) {
+            this._easterEl = document.createElement('div');
+            this._easterEl.id = 'easter-badge';
+            Object.assign(this._easterEl.style, {
+                position: 'fixed', top: '40%', left: '50%',
+                transform: 'translate(-50%, -50%)',
+                padding: '14px 28px',
+                background: 'linear-gradient(90deg, #ffd700, #ff66cc)',
+                color: '#fff',
+                fontSize: '28px', fontWeight: 'bold',
+                borderRadius: '999px',
+                boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+                zIndex: '20',
+                pointerEvents: 'none',
+                transition: 'opacity 0.5s, transform 0.5s',
+                opacity: '0',
+            });
+            document.body.appendChild(this._easterEl);
+        }
+        this._easterEl.textContent = text;
+        this._easterEl.style.opacity = '1';
+        this._easterEl.style.transform = 'translate(-50%, -50%) scale(1.1)';
+        clearTimeout(this._easterTimer);
+        this._easterTimer = setTimeout(() => {
+            this._easterEl.style.opacity = '0';
+            this._easterEl.style.transform = 'translate(-50%, -50%) scale(0.9)';
+        }, 2200);
+    }
+
     _addBench(x, z, ry) {
         const group = new THREE.Group();
         const mat = new THREE.MeshToonMaterial({ color: 0x8a5a2e });
@@ -2742,6 +4023,8 @@ export class Game3D {
         this.animDecor.forEach(d => {
             if (d.type === 'windmill') {
                 d.hub.rotation.z += 0.008;
+            } else if (d.type === 'giantWindmill') {
+                d.hub.rotation.z += 0.004;
             } else if (d.type === 'swing') {
                 d.pivot.rotation.x = Math.sin(t * 0.9 + d.phase) * 0.45;
             }
@@ -2823,18 +4106,26 @@ export class Game3D {
         bladeMat.onBeforeCompile = (shader) => {
             shader.uniforms.uTime = { value: 0 };
             shader.uniforms.uWindStrength = { value: 0.35 };
-            shader.vertexShader = shader.vertexShader.replace(
-                '#include <begin_vertex>',
-                `
-                vec3 transformed = vec3(position);
-                vec4 wp = instanceMatrix * vec4(position, 1.0);
-                float bend = pow(max(0.0, position.y / 0.42), 1.6);
-                float phase = wp.x * 0.18 + wp.z * 0.22;
-                float wave = sin(uTime * 1.4 + phase) * 0.5 + sin(uTime * 0.6 + phase * 1.7) * 0.3;
-                transformed.x += wave * bend * uWindStrength;
-                transformed.z += wave * bend * uWindStrength * 0.4;
-                `
-            );
+            // 关键：先在 <common> 后面加 uniform 声明，再替换 begin_vertex
+            shader.vertexShader = shader.vertexShader
+                .replace(
+                    '#include <common>',
+                    `#include <common>
+                    uniform float uTime;
+                    uniform float uWindStrength;`
+                )
+                .replace(
+                    '#include <begin_vertex>',
+                    `
+                    vec3 transformed = vec3(position);
+                    vec4 wp = instanceMatrix * vec4(position, 1.0);
+                    float bend = pow(max(0.0, position.y / 0.42), 1.6);
+                    float phase = wp.x * 0.18 + wp.z * 0.22;
+                    float wave = sin(uTime * 1.4 + phase) * 0.5 + sin(uTime * 0.6 + phase * 1.7) * 0.3;
+                    transformed.x += wave * bend * uWindStrength;
+                    transformed.z += wave * bend * uWindStrength * 0.4;
+                    `
+                );
             bladeMat.userData.shader = shader;
         };
 
@@ -3818,6 +5109,11 @@ export class Game3D {
                 e.preventDefault();
                 this._restart();
             }
+            // 到达终点后按 ESC 继续逛
+            if (this.won && e.code === 'Escape') {
+                e.preventDefault();
+                this._dismissWin();
+            }
             if (this.won && e.code === 'KeyR') {
                 e.preventDefault();
                 try { localStorage.removeItem('eggGameWonGoals'); } catch (err) {}
@@ -3828,6 +5124,11 @@ export class Game3D {
             if (e.code === 'Digit2') this.dayPhase = 0.78;  // 日落
             if (e.code === 'Digit3') this.dayPhase = 0.0;   // 半夜
             if (e.code === 'Digit4') this.dayPhase = 0.25;  // 日出
+            // 彩蛋：Konami 输入序列追踪
+            if (this._konamiSeq) this._onKonamiKey(e.code);
+            // 互动键
+            if (e.code === 'KeyE') { e.preventDefault(); this._doWatering(); }
+            if (e.code === 'KeyF') { e.preventDefault(); this._toggleFishing(); }
             if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
                 e.preventDefault();
             }
@@ -3843,7 +5144,7 @@ export class Game3D {
         this.hintEl = document.getElementById('game-hint');
         if (this.hintEl) {
             this.hintEl.style.display = 'block';
-            this.hintEl.textContent = 'WASD 走 · 空格跳 · C 换造型 · 1/2/3/4 切时段';
+            this.hintEl.textContent = 'WASD 走 · 空格跳 · E 浇花 · F 钓鱼 · C 换造型 · 1/2/3/4 切时段';
         }
     }
 
@@ -3895,6 +5196,27 @@ export class Game3D {
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
+        this._updateFishingBoat();
+        this._updateLighthouse(dt);
+        this._checkGreets();
+        this._updateRainbow(dt);
+        this._updateShootingStars(dt);
+        if (!this.dying && !this.won) {
+            this._checkSwimming(dt);
+            this._checkIceSlide(dt);
+            this._checkPenguin();
+            this._updateBridgeTreasure(dt);
+            this._checkFountainWish(dt);
+            this._updateBackyardGold(dt);
+        }
+        this._updateGiantMode(dt);
+        this._updateFishing(dt);
+        this._updateSeason(dt);
+        if (this._wateringCooldown > 0) this._wateringCooldown -= dt;
+        if (!this.dying && !this.won) {
+            this._checkHiddenFox();
+            this._checkLighthouseNote();
+        }
         // 风车撞飞冷却
         if (this._knockbackCooldown > 0) {
             this._knockbackCooldown -= dt;
@@ -4138,9 +5460,14 @@ export class Game3D {
     }
 
     _triggerWin(goal) {
+        if (goal.triggeredThisRun) return;  // 同一 session 内不再重复触发
+        goal.triggeredThisRun = true;
         this.won = true;
         this._saveWonGoal(goal.name);
         this._playWin();
+        // 星暗化，提示"已通过"
+        goal.star.material.emissiveIntensity = 0.4;
+        goal.star.material.color.setHex(0xeed694);
         const allWon = this._loadWonGoals();
         const totalGoals = this.goals.length;
         const allCleared = allWon.length >= totalGoals;
@@ -4148,9 +5475,15 @@ export class Game3D {
             const extra = allCleared
                 ? '<br><small style="font-size:16px;color:#888">三方全通！按 R 重置探险记录</small>'
                 : `<br><small style="font-size:16px;color:#888">已通 ${allWon.length}/${totalGoals}</small>`;
-            this.statusEl.innerHTML = `🎉 你到达「${goal.name}」啦！${extra}<br><small style="font-size:18px">按 空格 再玩一次 · 按 C 换造型</small>`;
+            this.statusEl.innerHTML = `🎉 你到达「${goal.name}」啦！${extra}<br><small style="font-size:18px">ESC 继续逛 · 空格 重玩 · C 换造型</small>`;
             this.statusEl.style.display = 'block';
         }
+    }
+
+    _dismissWin() {
+        this.won = false;
+        if (this.statusEl) this.statusEl.style.display = 'none';
+        // 星已经标了 triggeredThisRun，不会再弹
     }
 
     _triggerDeath() {
