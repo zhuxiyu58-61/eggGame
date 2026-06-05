@@ -111,6 +111,47 @@ body {
     z-index: 5;
 }
 
+#game-extract {
+    position: fixed;
+    top: 220px;
+    right: 16px;
+    padding: 8px 16px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+    transition: background 0.3s;
+}
+
+#game-treasure {
+    position: fixed;
+    top: 258px;
+    right: 16px;
+    padding: 8px 16px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 14px;
+    pointer-events: none;
+    z-index: 5;
+    transition: background 0.3s;
+}
+
+#game-hp {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    padding: 6px 14px;
+    background: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 20px;
+    pointer-events: none;
+    z-index: 5;
+}
+
 #game-status {
     position: fixed;
     top: 50%;

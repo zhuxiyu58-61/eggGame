@@ -544,10 +544,14 @@ export class Game3D {
         // ===== 新彩蛋 =====
         this._addTreeHiddenEmoji();
         this._addLighthouseNote();
-        // ===== BGM / 背包 / 成就 =====
+        // ===== BGM / 背包 / 成就 / 搜打撤 + 宝物 =====
         this._initBGM();
         this._initInventory();
         this._initAchievements();
+        this._buildExtractionPad();
+        this._initExtraction();
+        this._buildChests();
+        this._buildMonsters();
 
         // 通关标记应用到已完成的路 + 全通后解锁伙伴
         this._applyWonGoals();
@@ -2929,6 +2933,694 @@ export class Game3D {
         this.animDecor.push({ type: 'giantWindmill', hub });
     }
 
+    // ========= 搜打撤撤离机制 + 宝箱盲盒 + 怪物 + 战斗 =========
+
+    _buildExtractionPad() {
+        const x = 25, z = 35;
+        this.extractCenter = { x, z };
+        this.extractRadius = 3.0;
+
+        const group = new THREE.Group();
+        // 八边形石质台座
+        const base = new THREE.Mesh(
+            new THREE.CylinderGeometry(3.2, 3.5, 0.3, 8),
+            new THREE.MeshToonMaterial({ color: 0x808a90 })
+        );
+        base.position.y = 0.15;
+        base.receiveShadow = true;
+        addOutline(base, 0.025);
+        group.add(base);
+        // 顶部圆盘
+        const disc = new THREE.Mesh(
+            new THREE.CylinderGeometry(2.6, 2.6, 0.08, 32),
+            new THREE.MeshToonMaterial({ color: 0xa0aab0 })
+        );
+        disc.position.y = 0.34;
+        group.add(disc);
+        // 发光圆环（状态指示）
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(2.4, 0.18, 8, 48),
+            new THREE.MeshStandardMaterial({
+                color: 0x555555, emissive: 0x222222, emissiveIntensity: 0.3,
+            })
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 0.45;
+        group.add(ring);
+        // 中央光柱（开启时显形）
+        const beam = new THREE.Mesh(
+            new THREE.CylinderGeometry(2.4, 2.0, 20, 16, 1, true),
+            new THREE.MeshBasicMaterial({
+                color: 0x66ddff, transparent: true, opacity: 0,
+                side: THREE.DoubleSide, depthWrite: false, fog: false,
+            })
+        );
+        beam.position.y = 10;
+        group.add(beam);
+        // 四角立柱+顶端发光球
+        this.extractOrbs = [];
+        for (let i = 0; i < 4; i++) {
+            const ang = (i / 4) * Math.PI * 2 + Math.PI / 4;
+            const px = Math.cos(ang) * 2.9, pz = Math.sin(ang) * 2.9;
+            const pillar = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.15, 0.18, 1.6, 8),
+                new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+            );
+            pillar.position.set(px, 0.95, pz);
+            pillar.castShadow = true;
+            addOutline(pillar, 0.04);
+            group.add(pillar);
+            const orb = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18, 12, 8),
+                new THREE.MeshStandardMaterial({
+                    color: 0x999999, emissive: 0x222222, emissiveIntensity: 0.2,
+                })
+            );
+            orb.position.set(px, 1.85, pz);
+            group.add(orb);
+            this.extractOrbs.push(orb);
+        }
+        // 招牌
+        const signTex = makeSignTexture('撤离点');
+        const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, depthWrite: false }));
+        sign.scale.set(2.2, 0.78, 1);
+        sign.position.set(0, 3.0, 0);
+        group.add(sign);
+
+        group.position.set(x, 0, z);
+        this.scene.add(group);
+        this.extractRing = ring;
+        this.extractBeam = beam;
+
+        // PointLight 窗口期点亮场景
+        this.extractLight = new THREE.PointLight(0x66ddff, 0, 12, 1.4);
+        this.extractLight.position.set(x, 3, z);
+        this.scene.add(this.extractLight);
+    }
+
+    _initExtraction() {
+        this.extractPhase = 'closed';   // closed / open
+        this.extractPhaseTimer = 30 + Math.random() * 30;  // 首次窗口 30-60s 后开
+        this.extractStandT = 0;
+        this.extracted = false;
+        this._extractCount = parseInt(localStorage.getItem('eggExtractCount') || '0', 10);
+        this._extractChip = document.getElementById('game-extract');
+    }
+
+    _updateExtraction(dt) {
+        if (this.extracted) return;
+        // 状态机
+        this.extractPhaseTimer -= dt;
+        if (this.extractPhaseTimer <= 0) {
+            if (this.extractPhase === 'closed') {
+                this.extractPhase = 'open';
+                this.extractPhaseTimer = 30;
+                this._playExtractOpen();
+                this._showEasterBadge('🚁 撤离窗口开启！30 秒内到撤离点');
+            } else {
+                this.extractPhase = 'closed';
+                this.extractPhaseTimer = 60 + Math.random() * 60;
+                this.extractStandT = 0;
+            }
+        }
+        // 视觉
+        const t = performance.now() * 0.001;
+        const isOpen = this.extractPhase === 'open';
+        if (isOpen) {
+            this.extractRing.material.color.setHex(0x66ddff);
+            this.extractRing.material.emissive.setHex(0x66ddff);
+            this.extractRing.material.emissiveIntensity = 1.6 + Math.sin(t * 6) * 0.4;
+            this.extractRing.rotation.z = t * 1.5;
+            this.extractBeam.material.opacity = 0.28 + Math.sin(t * 4) * 0.08;
+            this.extractLight.intensity = 2.2 + Math.sin(t * 5) * 0.5;
+            this.extractOrbs.forEach((o, i) => {
+                o.material.color.setHex(0x66ddff);
+                o.material.emissive.setHex(0x66ddff);
+                o.material.emissiveIntensity = 2 + Math.sin(t * 8 + i) * 0.5;
+            });
+        } else {
+            this.extractRing.material.emissive.setHex(0x222222);
+            this.extractRing.material.emissiveIntensity = 0.3;
+            this.extractBeam.material.opacity = 0;
+            this.extractLight.intensity = 0;
+            this.extractOrbs.forEach(o => {
+                o.material.emissive.setHex(0x222222);
+                o.material.emissiveIntensity = 0.2;
+            });
+        }
+        // 站点检测：窗口期 + 金额 5w + 8m 内无活怪
+        if (isOpen && !this.dying) {
+            const p = this.player.position;
+            const dx = p.x - this.extractCenter.x;
+            const dz = p.z - this.extractCenter.z;
+            const dist = Math.hypot(dx, dz);
+            const inZone = dist < this.extractRadius && p.y < 2;
+            // 检查附近活怪
+            let monsterBlocking = false;
+            if (this.monsters) {
+                for (const m of this.monsters) {
+                    if (m.state !== 'alive') continue;
+                    const mx = m.group.position.x - this.extractCenter.x;
+                    const mz = m.group.position.z - this.extractCenter.z;
+                    if (Math.hypot(mx, mz) < 8) { monsterBlocking = true; break; }
+                }
+            }
+            const enoughCash = this.carriedValue >= 50000;
+            if (inZone && enoughCash && !monsterBlocking) {
+                this.extractStandT += dt;
+                if (this.extractStandT >= 13) this._triggerExtraction();
+            } else {
+                this.extractStandT = Math.max(0, this.extractStandT - dt * 2);
+                if (inZone) {
+                    // 站着但条件不满足：给提示（每 2s 一次）
+                    const now = performance.now();
+                    if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
+                        this._lastExtractWarn = now;
+                        if (!enoughCash) {
+                            const need = 50000 - this.carriedValue;
+                            this._showEasterBadge(`💰 还差 ${need.toLocaleString()} 才能撤离`);
+                        } else if (monsterBlocking) {
+                            this._showEasterBadge('⚠️ 怪物在阻拦！先清掉再撤离');
+                        }
+                    }
+                }
+            }
+        }
+        // chip
+        this._renderExtractChip();
+    }
+
+    _renderExtractChip() {
+        if (!this._extractChip) return;
+        if (this.extracted) {
+            this._extractChip.textContent = `🚁 已撤离 ×${this._extractCount}`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #66ddff, #66ff99)';
+            return;
+        }
+        this._extractChip.style.background = 'rgba(0, 0, 0, 0.4)';
+        if (this.extractPhase === 'closed') {
+            this._extractChip.textContent = `🛰️ 撤离 ${Math.ceil(this.extractPhaseTimer)}s 后开启`;
+        } else if (this.extractStandT > 0) {
+            const remain = Math.max(0, 13 - this.extractStandT);
+            this._extractChip.innerHTML = `🚁 撤离倒计时 <b>${remain.toFixed(1)}s</b>`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #ff66cc, #ffd700)';
+        } else {
+            this._extractChip.innerHTML = `🚁 撤离窗口 ${Math.ceil(this.extractPhaseTimer)}s · 去撤离点`;
+            this._extractChip.style.background = 'rgba(102, 221, 255, 0.5)';
+        }
+    }
+
+    _playExtractOpen() {
+        this._tone(660, 0.4, 'sine', 0.08);
+        this._tone(880, 0.4, 'sine', 0.06, 0.15);
+        this._tone(1320, 0.6, 'sine', 0.05, 0.30);
+    }
+
+    _triggerExtraction() {
+        this.extracted = true;
+        this.bankedTotal = (this.bankedTotal || 0) + this.carriedValue;
+        this._extractCount++;
+        try {
+            localStorage.setItem('eggExtractCount', String(this._extractCount));
+            localStorage.setItem('eggBankedTotal', String(this.bankedTotal));
+        } catch (e) {}
+        const earned = this.carriedValue;
+        this.carriedValue = 0;
+        this._renderTreasureChip();
+        this._unlockAchievement('first_extract');
+        if (this._extractCount >= 3) this._unlockAchievement('three_extract');
+        this._launchFirework();
+        this._launchFirework();
+        this._launchFirework();
+        this._playWin();
+        if (this.statusEl) {
+            this.statusEl.innerHTML = `🚁 <b>撤离成功！</b><br><small style="font-size:18px">本次带走 💰 ${earned.toLocaleString()} · 累计 ${this.bankedTotal.toLocaleString()}</small>`;
+            this.statusEl.style.display = 'block';
+        }
+        setTimeout(() => {
+            if (this.statusEl) this.statusEl.style.display = 'none';
+            this.extracted = false;
+            this.extractPhase = 'closed';
+            this.extractPhaseTimer = 60 + Math.random() * 60;
+            this.extractStandT = 0;
+            this._renderExtractChip();
+        }, 3000);
+    }
+
+    // ========= 宝箱盲盒 =========
+    _buildChests() {
+        this.chests = [];
+        this.carriedValue = 0;
+        this.bankedTotal = parseInt(localStorage.getItem('eggBankedTotal') || '0', 10);
+
+        // 14 种掉落
+        this.lootTable = [
+            { rarity: 0.20, name: '普通宝石', emoji: '⚪', color: 0xeeeeee, value: 500,    kind: 'gem' },
+            { rarity: 0.18, name: '良好宝石', emoji: '🟢', color: 0x66ff66, value: 2000,   kind: 'gem' },
+            { rarity: 0.13, name: '稀有宝石', emoji: '🔵', color: 0x66aaff, value: 5000,   kind: 'gem' },
+            { rarity: 0.07, name: '史诗宝石', emoji: '🟣', color: 0xc060ff, value: 15000,  kind: 'gem' },
+            { rarity: 0.02, name: '传说宝石', emoji: '⭐', color: 0xffaa00, value: 50000,  kind: 'gem' },
+            { rarity: 0.04, name: '木剑',     emoji: '🗡️', color: 0x9a6a3a, value: 0,      kind: 'weapon' },
+            { rarity: 0.03, name: '小弓',     emoji: '🏹', color: 0x8a5a2e, value: 0,      kind: 'weapon' },
+            { rarity: 0.02, name: '魔法书',   emoji: '📕', color: 0xff5050, value: 0,      kind: 'weapon' },
+            { rarity: 0.08, name: '破鞋',     emoji: '🥾', color: 0x6a4a2a, value: 0,      kind: 'junk' },
+            { rarity: 0.05, name: '烂菜叶',   emoji: '🥬', color: 0x556633, value: 0,      kind: 'junk' },
+            { rarity: 0.05, name: '老报纸',   emoji: '📰', color: 0xaaaaaa, value: 0,      kind: 'junk' },
+            { rarity: 0.06, name: '诅咒符',   emoji: '💀', color: 0x444444, value: -3000,  kind: 'curse' },
+            { rarity: 0.04, name: '黑洞球',   emoji: '🌑', color: 0x222244, value: -5000,  kind: 'curse' },
+            { rarity: 0.03, name: '空箱',     emoji: '🕳️', color: 0x666666, value: 0,      kind: 'empty' },
+        ];
+
+        for (let i = 0; i < 22; i++) {
+            let x, z, ok = false;
+            for (let tries = 0; tries < 30; tries++) {
+                const ang = Math.random() * Math.PI * 2;
+                const r = 10 + Math.random() * 65;
+                x = Math.cos(ang) * r;
+                z = Math.sin(ang) * r;
+                if (this._isValidChestPos(x, z)) { ok = true; break; }
+            }
+            if (ok) this._addChest(x, z);
+        }
+        this._renderTreasureChip();
+    }
+
+    _isValidChestPos(x, z) {
+        if (Math.hypot(x, z) < 8) return false;
+        if (Math.hypot(x - 25, z - 35) < 5) return false;
+        return true;
+    }
+
+    _addChest(x, z) {
+        const group = new THREE.Group();
+        const body = new THREE.Mesh(
+            new THREE.BoxGeometry(0.9, 0.55, 0.65),
+            new THREE.MeshToonMaterial({ color: 0x8a5a2e })
+        );
+        body.position.y = 0.275;
+        body.castShadow = true;
+        addOutline(body, 0.03);
+        group.add(body);
+        // 金边
+        const bandMat = new THREE.MeshToonMaterial({ color: 0xc89020 });
+        const band = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
+        band.position.y = 0.12;
+        group.add(band);
+        const band2 = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
+        band2.position.y = 0.44;
+        group.add(band2);
+        // 锁
+        const lock = new THREE.Mesh(
+            new THREE.BoxGeometry(0.14, 0.18, 0.08),
+            new THREE.MeshToonMaterial({ color: 0xc89020 })
+        );
+        lock.position.set(0, 0.42, 0.36);
+        group.add(lock);
+        // 盖子（pivot 在后铰链处）
+        const lidPivot = new THREE.Group();
+        lidPivot.position.set(0, 0.55, -0.325);
+        const lid = new THREE.Mesh(
+            new THREE.BoxGeometry(0.9, 0.18, 0.65),
+            new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+        );
+        lid.position.set(0, 0.09, 0.325);
+        lid.castShadow = true;
+        addOutline(lid, 0.03);
+        lidPivot.add(lid);
+        group.add(lidPivot);
+        // 内部光（开盖发光）
+        const innerLight = new THREE.PointLight(0xffd700, 0, 4, 1.5);
+        innerLight.position.set(0, 0.35, 0);
+        group.add(innerLight);
+
+        group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI * 2;
+        this.scene.add(group);
+        this.chests.push({
+            group, lidPivot, light: innerLight,
+            x, z, state: 'closed', animT: 0,
+            rewardSprite: null,
+        });
+        // 注册为障碍（防止穿过）— 小一点的 AABB
+        this.obstacles.push({
+            min: new THREE.Vector3(x - 0.5, 0, z - 0.4),
+            max: new THREE.Vector3(x + 0.5, 0.6, z + 0.4),
+        });
+    }
+
+    _updateChests(dt) {
+        if (!this.chests) return;
+        const p = this.player.position;
+        const t = performance.now() * 0.001;
+        for (const c of this.chests) {
+            if (c.state === 'closed') {
+                const dx = p.x - c.x, dz = p.z - c.z;
+                if (Math.hypot(dx, dz) < 1.6) this._openChest(c);
+            } else if (c.state === 'opening') {
+                c.animT += dt;
+                // 盖子开 0→-1.3 rad
+                c.lidPivot.rotation.x = Math.max(-1.3, -c.animT * 2.5);
+                c.light.intensity = Math.min(2.2, c.animT * 4);
+                if (c.rewardSprite) {
+                    c.rewardSprite.position.y = 0.6 + c.animT * 1.2;
+                    c.rewardSprite.material.rotation = t * 2;
+                    if (c.animT > 1.2) {
+                        c.rewardSprite.material.opacity = Math.max(0, 1 - (c.animT - 1.2) * 1.2);
+                    }
+                }
+                if (c.animT > 2.5) {
+                    c.state = 'opened';
+                    if (c.rewardSprite) {
+                        c.group.remove(c.rewardSprite);
+                        c.rewardSprite.material.map?.dispose();
+                        c.rewardSprite.material.dispose();
+                        c.rewardSprite = null;
+                    }
+                    c.light.intensity = 0.4;  // 空盒留一点微光
+                }
+            }
+        }
+    }
+
+    _rollLoot() {
+        let r = Math.random();
+        for (const item of this.lootTable) {
+            if (r < item.rarity) return item;
+            r -= item.rarity;
+        }
+        return this.lootTable[0];
+    }
+
+    _openChest(c) {
+        c.state = 'opening';
+        c.animT = 0;
+        const loot = this._rollLoot();
+
+        // 应用效果
+        if (loot.kind === 'gem' || loot.kind === 'curse') {
+            this.carriedValue = Math.max(0, this.carriedValue + loot.value);
+            this._renderTreasureChip();
+        }
+        if (loot.kind === 'weapon' || loot.kind === 'junk') {
+            this._addToInventory(loot.emoji);
+        }
+
+        // 飞出的 emoji 精灵
+        const cv = document.createElement('canvas');
+        cv.width = 128; cv.height = 128;
+        const ctx = cv.getContext('2d');
+        ctx.font = '100px serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(loot.emoji, 64, 64);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+        }));
+        sprite.scale.set(0.8, 0.8, 1);
+        sprite.position.set(0, 0.5, 0);
+        c.group.add(sprite);
+        c.rewardSprite = sprite;
+
+        // 文本提示
+        const sign = loot.value > 0 ? '+' : (loot.value < 0 ? '' : '');
+        const valText = loot.value !== 0 ? ` ${sign}${loot.value.toLocaleString()}` : '';
+        this._showEasterBadge(`${loot.emoji} ${loot.name}${valText}`);
+
+        // 音效（按 kind 决定）
+        if (loot.kind === 'gem') {
+            const pitch = 400 + Math.log2(loot.value / 500 + 1) * 250;
+            this._tone(pitch, 0.15, 'sine', 0.07);
+            this._tone(pitch * 1.5, 0.2, 'sine', 0.05, 0.08);
+            if (loot.value >= 50000) {
+                this._launchFirework();
+                this._tone(pitch * 2.2, 0.3, 'sine', 0.05, 0.16);
+                this._unlockAchievement('legendary_loot');
+            } else if (loot.value >= 15000) {
+                this._tone(pitch * 1.8, 0.25, 'sine', 0.05, 0.14);
+            }
+        } else if (loot.kind === 'curse') {
+            this._tone(120, 0.4, 'sawtooth', 0.08);
+            this._tone(80, 0.5, 'square', 0.06, 0.1);
+        } else if (loot.kind === 'weapon') {
+            this._tone(700, 0.15, 'square', 0.05);
+            this._tone(900, 0.2, 'triangle', 0.04, 0.08);
+        } else {
+            this._tone(300, 0.2, 'triangle', 0.04);
+        }
+    }
+
+    _renderTreasureChip() {
+        if (!this._treasureChip) this._treasureChip = document.getElementById('game-treasure');
+        if (!this._treasureChip) return;
+        const need = 50000;
+        const enough = this.carriedValue >= need;
+        const pct = Math.min(100, (this.carriedValue / need * 100));
+        this._treasureChip.innerHTML =
+            `💰 <b>${this.carriedValue.toLocaleString()}</b> / ${need.toLocaleString()}` +
+            (enough ? ' ✅' : ` <small>(${pct.toFixed(0)}%)</small>`);
+        this._treasureChip.style.background = enough
+            ? 'linear-gradient(90deg, #66ff66, #ffd700)'
+            : 'rgba(0, 0, 0, 0.5)';
+    }
+
+    // ========= 怪物 + 玩家血量 + 战斗 =========
+    _buildMonsters() {
+        this.monsters = [];
+        this.playerHP = 5;
+        this.playerHPMax = 5;
+        this._attackCooldown = 0;
+        this._invincible = 0;
+        // 等 DOM 准备好再画一次血条
+        setTimeout(() => this._renderPlayerHP(), 50);
+        const spots = [
+            { x: 18, z: -8 },          // 东路
+            { x: -18, z: -8 },         // 西路
+            { x: 0, z: -25 },          // 北路
+            { x: 22, z: 28 },          // 撤离点附近（阻拦）
+            { x: 30, z: 38 },          // 撤离点东侧
+        ];
+        spots.forEach(s => this._addMonster(s.x, s.z));
+    }
+
+    _addMonster(x, z) {
+        const group = new THREE.Group();
+        // 紫色幽灵蛋身体
+        const r = 0.4;
+        const bodyGeo = new THREE.SphereGeometry(r, 20, 16);
+        bodyGeo.scale(1, 1.2, 1);
+        bodyGeo.translate(0, r * 1.2, 0);
+        const body = new THREE.Mesh(
+            bodyGeo,
+            new THREE.MeshToonMaterial({ color: 0x8050a0, transparent: true, opacity: 0.92 })
+        );
+        body.castShadow = true;
+        addOutline(body, 0.05);
+        group.add(body);
+        // 大圆眼（白+黑）
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(
+                new THREE.SphereGeometry(r * 0.18, 10, 8),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            eye.position.set(sx * r * 0.3, r * 1.55, -r * 0.78);
+            group.add(eye);
+            const pupil = new THREE.Mesh(
+                new THREE.SphereGeometry(r * 0.10, 8, 6),
+                new THREE.MeshBasicMaterial({ color: 0x1a0a1a })
+            );
+            pupil.position.set(sx * r * 0.3, r * 1.55, -r * 0.92);
+            group.add(pupil);
+        }
+        // 尖牙（小白三角）
+        const fang = new THREE.Mesh(
+            new THREE.ConeGeometry(0.04, 0.10, 4),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        fang.position.set(0, r * 1.08, -r * 0.78);
+        fang.rotation.x = Math.PI;
+        group.add(fang);
+
+        // 头顶 HP bar（DOM-like 用 Sprite + canvas 动态更新）
+        const hpCv = document.createElement('canvas');
+        hpCv.width = 80; hpCv.height = 12;
+        const hpTex = new THREE.CanvasTexture(hpCv);
+        hpTex.colorSpace = THREE.SRGBColorSpace;
+        const hpSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: hpTex, depthWrite: false, transparent: true,
+        }));
+        hpSprite.scale.set(1.2, 0.18, 1);
+        hpSprite.position.y = r * 2.5;
+        group.add(hpSprite);
+
+        group.position.set(x, 0, z);
+        this.scene.add(group);
+        const m = {
+            group, body, hpSprite, hpCv, hpTex,
+            home: new THREE.Vector3(x, 0, z),
+            hp: 3, maxHp: 3,
+            state: 'alive',
+            respawnT: 0,
+            attackCD: 0,
+            phase: Math.random() * Math.PI * 2,
+            hitFlash: 0,
+        };
+        this._drawMonsterHP(m);
+        this.monsters.push(m);
+    }
+
+    _drawMonsterHP(m) {
+        const ctx = m.hpCv.getContext('2d');
+        ctx.clearRect(0, 0, 80, 12);
+        // 底
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, 80, 12);
+        // 血
+        const pct = Math.max(0, m.hp / m.maxHp);
+        ctx.fillStyle = pct > 0.6 ? '#66ff66' : (pct > 0.3 ? '#ffd700' : '#ff5050');
+        ctx.fillRect(2, 2, 76 * pct, 8);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0, 0, 80, 12);
+        m.hpTex.needsUpdate = true;
+    }
+
+    _updateMonsters(dt) {
+        if (!this.monsters) return;
+        const t = performance.now() * 0.001;
+        const p = this.player.position;
+        for (const m of this.monsters) {
+            if (m.state === 'ko') {
+                m.respawnT -= dt;
+                if (m.respawnT <= 0) {
+                    m.state = 'alive';
+                    m.hp = m.maxHp;
+                    m.group.visible = true;
+                    m.group.position.copy(m.home);
+                    m.group.position.y = 0;
+                    this._drawMonsterHP(m);
+                }
+                continue;
+            }
+            // 漂浮
+            m.group.position.y = 0.15 + Math.sin(t * 2 + m.phase) * 0.10;
+            // AI：玩家近 10m → 追
+            const dx = p.x - m.group.position.x;
+            const dz = p.z - m.group.position.z;
+            const dist = Math.hypot(dx, dz);
+            const SPEED = 3.5;
+            if (dist < 10 && dist > 0.6) {
+                m.group.position.x += (dx / dist) * SPEED * dt;
+                m.group.position.z += (dz / dist) * SPEED * dt;
+                m.group.rotation.y = Math.atan2(dx, dz);
+            } else if (dist >= 10) {
+                // 回家
+                const hx = m.home.x - m.group.position.x;
+                const hz = m.home.z - m.group.position.z;
+                const hd = Math.hypot(hx, hz);
+                if (hd > 0.3) {
+                    m.group.position.x += (hx / hd) * SPEED * 0.5 * dt;
+                    m.group.position.z += (hz / hd) * SPEED * 0.5 * dt;
+                }
+            }
+            // 攻击玩家：1.0m 内 1s 一次扣 1 血
+            m.attackCD -= dt;
+            if (dist < 1.0 && m.attackCD <= 0 && this._invincible <= 0) {
+                m.attackCD = 1.0;
+                this._hurtPlayer(1, dx, dz);
+            }
+            // 受击闪光
+            if (m.hitFlash > 0) {
+                m.hitFlash -= dt;
+                m.body.material.emissive = m.body.material.emissive || new THREE.Color();
+                m.body.material.emissive.setHex(m.hitFlash > 0 ? 0xff5050 : 0x000000);
+            }
+        }
+        if (this._attackCooldown > 0) this._attackCooldown -= dt;
+        if (this._invincible > 0) this._invincible -= dt;
+    }
+
+    _doMeleeAttack() {
+        if (this._attackCooldown > 0) return;
+        this._attackCooldown = 0.6;
+        const p = this.player.position;
+        let hit = false;
+        for (const m of this.monsters) {
+            if (m.state !== 'alive') continue;
+            const dx = p.x - m.group.position.x;
+            const dz = p.z - m.group.position.z;
+            if (Math.hypot(dx, dz) < 1.5) {
+                m.hp -= 1;
+                m.hitFlash = 0.2;
+                this._drawMonsterHP(m);
+                this._tone(900, 0.1, 'square', 0.06);
+                if (m.hp <= 0) {
+                    this._koMonster(m);
+                }
+                hit = true;
+            }
+        }
+        if (!hit) this._tone(200, 0.08, 'sine', 0.03); // 空挥
+    }
+
+    _koMonster(m) {
+        m.state = 'ko';
+        m.group.visible = false;
+        m.respawnT = 30;
+        this._launchFirework();
+        this._tone(1320, 0.2, 'sine', 0.07);
+        this._unlockAchievement('first_ko');
+    }
+
+    _hurtPlayer(dmg, fromDx, fromDz) {
+        this.playerHP = Math.max(0, this.playerHP - dmg);
+        this._invincible = 1.0;
+        this._renderPlayerHP();
+        // 击退
+        const norm = Math.hypot(fromDx, fromDz) || 1;
+        this.velocity.x += (fromDx / norm) * 6;
+        this.velocity.z += (fromDz / norm) * 6;
+        this.playerVy = 3;
+        this.onGround = false;
+        // 闪红
+        this.player.children.forEach(c => {
+            if (c.material && c.material.color) {
+                c._origColor = c._origColor || c.material.color.getHex();
+                c.material.color.setHex(0xff5050);
+            }
+        });
+        setTimeout(() => {
+            this.player.children.forEach(c => {
+                if (c._origColor !== undefined) c.material.color.setHex(c._origColor);
+            });
+        }, 200);
+        this._tone(150, 0.2, 'sawtooth', 0.08);
+        if (this.playerHP <= 0) this._playerDown();
+    }
+
+    _playerDown() {
+        // 倒下：扔掉宝物，回广场，满血
+        this._showEasterBadge(`💀 倒下了！丢失 💰 ${this.carriedValue.toLocaleString()}`);
+        this.carriedValue = 0;
+        this._renderTreasureChip();
+        this.player.position.set(0, 0.6, 6);
+        this.velocity.x = 0;
+        this.velocity.z = 0;
+        this.playerVy = 0;
+        this.playerHP = this.playerHPMax;
+        this._invincible = 2.0;
+        this._renderPlayerHP();
+        this._tone(80, 1.0, 'sawtooth', 0.10);
+    }
+
+    _renderPlayerHP() {
+        if (!this._hpChip) this._hpChip = document.getElementById('game-hp');
+        if (!this._hpChip) return;
+        const heart = '❤️'.repeat(this.playerHP) + '🖤'.repeat(this.playerHPMax - this.playerHP);
+        this._hpChip.textContent = heart;
+    }
+
     // ========= BGM（Web Audio 合成 ambient pad）=========
     _initBGM() {
         this.bgmMuted = false;
@@ -3070,6 +3762,10 @@ export class Game3D {
             { id: 'firework_lover',   label: '🎇 烟花迷（看 5 次）' },
             { id: 'snow_stand',       label: '⛄ 雪地站 10 秒' },
             { id: 'water_player',     label: '💧 浇花专家（10 次）' },
+            { id: 'first_extract',    label: '🚁 第一次撤离' },
+            { id: 'three_extract',    label: '🚁 撤离 3 次' },
+            { id: 'legendary_loot',   label: '✨ 抽到传说级' },
+            { id: 'first_ko',         label: '⚔️ 击败第一只怪' },
         ];
         this._seasonsSeen = new Set();
         this._snowStandT = 0;
@@ -5358,6 +6054,34 @@ export class Game3D {
     }
 
     _setupInput() {
+        // ===== 鼠标视角（pointer lock）=====
+        this.cameraYaw = 0;
+        this.cameraPitch = -0.15;
+        this.mouseLocked = false;
+
+        this._onCanvasClick = () => {
+            if (!this.mouseLocked && !this.won && !this.dying) {
+                this.renderer.domElement.requestPointerLock?.();
+            }
+        };
+        this.renderer.domElement.addEventListener('click', this._onCanvasClick);
+
+        this._onPointerLockChange = () => {
+            this.mouseLocked = document.pointerLockElement === this.renderer.domElement;
+        };
+        document.addEventListener('pointerlockchange', this._onPointerLockChange);
+
+        this._onMouseMove = (e) => {
+            if (!this.mouseLocked) return;
+            const sens = 0.0028;
+            this.cameraYaw += e.movementX * sens;
+            this.cameraPitch -= e.movementY * sens;
+            const lim = Math.PI / 2 - 0.1;
+            if (this.cameraPitch >  lim) this.cameraPitch =  lim;
+            if (this.cameraPitch < -lim) this.cameraPitch = -lim;
+        };
+        document.addEventListener('mousemove', this._onMouseMove);
+
         this._onKeyDown = (e) => {
             this.keys[e.code] = true;
             this._ensureAudio();  // 首次按键解锁 AudioContext
@@ -5390,6 +6114,7 @@ export class Game3D {
             if (e.code === 'KeyE') { e.preventDefault(); this._doWatering(); }
             if (e.code === 'KeyF') { e.preventDefault(); this._toggleFishing(); }
             if (e.code === 'KeyM') { e.preventDefault(); this._toggleBGM(); }
+            if (e.code === 'KeyJ') { e.preventDefault(); this._doMeleeAttack(); }
             if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
                 e.preventDefault();
             }
@@ -5405,7 +6130,7 @@ export class Game3D {
         this.hintEl = document.getElementById('game-hint');
         if (this.hintEl) {
             this.hintEl.style.display = 'block';
-            this.hintEl.textContent = 'WASD 走 · 空格跳 · E 浇花 · F 钓鱼 · M 音乐 · C 换造型 · 1/2/3/4 切时段';
+            this.hintEl.textContent = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · M 音乐 · C 换造型 · ESC 释放';
         }
     }
 
@@ -5474,6 +6199,11 @@ export class Game3D {
         this._updateFishing(dt);
         this._updateSeason(dt);
         this._updateBGM(dt);
+        this._updateExtraction(dt);
+        if (!this.dying && !this.won) {
+            this._updateChests(dt);
+            this._updateMonsters(dt);
+        }
         if (this._wateringCooldown > 0) this._wateringCooldown -= dt;
         if (!this.dying && !this.won) {
             this._checkHiddenFox();
@@ -5499,14 +6229,21 @@ export class Game3D {
     }
 
     _updatePlayer(dt) {
-        // 计算目标方向
-        let tx = 0, tz = 0;
-        if (this.keys['KeyW'] || this.keys['ArrowUp']) tz -= 1;
-        if (this.keys['KeyS'] || this.keys['ArrowDown']) tz += 1;
-        if (this.keys['KeyA'] || this.keys['ArrowLeft']) tx -= 1;
-        if (this.keys['KeyD'] || this.keys['ArrowRight']) tx += 1;
-        const mag = Math.hypot(tx, tz);
-        if (mag > 0) { tx /= mag; tz /= mag; }
+        // 计算目标方向（原始 WASD 输入）
+        let ix = 0, iz = 0;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) iz -= 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) iz += 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) ix -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) ix += 1;
+        const mag = Math.hypot(ix, iz);
+        if (mag > 0) { ix /= mag; iz /= mag; }
+
+        // 把输入旋转到相机坐标：W = 相机正前方
+        const yaw = this.cameraYaw;
+        const fwdX = Math.sin(yaw), fwdZ = -Math.cos(yaw);
+        const rightX = Math.cos(yaw), rightZ = Math.sin(yaw);
+        const tx = ix * rightX + iz * fwdX;
+        const tz = ix * rightZ + iz * fwdZ;
 
         // 朝目标速度平滑加/减速（不再瞬时启停）
         const targetVx = tx * MOVE_SPEED;
@@ -5518,11 +6255,15 @@ export class Game3D {
         this.player.position.x += this.velocity.x * dt;
         this.player.position.z += this.velocity.z * dt;
 
-        // 朝向只在确实在动时跟，避免松键瞬间甩头
-        const vmag = Math.hypot(this.velocity.x, this.velocity.z);
-        if (vmag > 0.5) {
-            const targetAngle = Math.atan2(this.velocity.x, -this.velocity.z);
-            this.player.rotation.y = lerpAngle(this.player.rotation.y, targetAngle, 0.18);
+        // 朝向：鼠标锁定时跟相机；否则跟速度方向
+        if (this.mouseLocked) {
+            this.player.rotation.y = lerpAngle(this.player.rotation.y, yaw, 0.25);
+        } else {
+            const vmag = Math.hypot(this.velocity.x, this.velocity.z);
+            if (vmag > 0.5) {
+                const targetAngle = Math.atan2(this.velocity.x, -this.velocity.z);
+                this.player.rotation.y = lerpAngle(this.player.rotation.y, targetAngle, 0.18);
+            }
         }
 
         if (this.keys['Space'] && this.onGround) {
@@ -5717,33 +6458,37 @@ export class Game3D {
     }
 
     _updateCamera() {
-        // 室外：高俯瞰跟随（刚性，不晕车）
-        // 室内：第一人称——相机进入蛋"眼睛"位置，朝蛋朝向看
-        // 切换：插值 0→1 让两套相机姿态平滑混合
         if (this._fpsT === undefined) {
             this._fpsT = 0;
-            this._tmpCam = new THREE.Vector3();
             this._tmpLook = new THREE.Vector3();
-            this._tmpFwd = new THREE.Vector3();
         }
         const target = this.isInsideHouse ? 1 : 0;
         this._fpsT += (target - this._fpsT) * 0.18;
 
         const p = this.player.position;
-        const angle = this.player.rotation.y;
-        this._tmpFwd.set(Math.sin(angle), 0, -Math.cos(angle));
+        const yaw = this.cameraYaw;
+        const pitch = this.cameraPitch;
+        const fwdX = Math.sin(yaw), fwdZ = -Math.cos(yaw);
 
-        // 室外姿态
-        const outX = p.x,            outY = p.y + 11,   outZ = p.z + 13;
-        const outLX = p.x,           outLY = p.y + 0.4, outLZ = p.z;
-        // FPS 姿态：相机在蛋脸前方（穿过描边壳到外面），蛋的眼睛高度，看向 10m 远
-        // fwd*0.8 = 蛋身体半径 0.6 + 一点点缓冲，避免在身体/描边内部
-        const fpsX = p.x + this._tmpFwd.x * 0.8,
-              fpsY = p.y + 0.33,
-              fpsZ = p.z + this._tmpFwd.z * 0.8;
-        const fpsLX = p.x + this._tmpFwd.x * 10;
-        const fpsLY = p.y + 0.30;
-        const fpsLZ = p.z + this._tmpFwd.z * 10;
+        // 室外：相机在 lookDir 反方向 13m + 上方 11m（蛋面对相机的反方向走，即蛋朝相机前方走）
+        const outRadius = 13, outHeight = 11;
+        const outX = p.x - fwdX * outRadius;
+        const outY = p.y + outHeight;
+        const outZ = p.z - fwdZ * outRadius;
+        const outLX = p.x, outLY = p.y + 0.4, outLZ = p.z;
+
+        // FPS：相机在蛋眼睛位置（沿 lookDir 前方 0.8m + 上 0.33m，避开描边壳）
+        const fpsX = p.x + fwdX * 0.8;
+        const fpsY = p.y + 0.33;
+        const fpsZ = p.z + fwdZ * 0.8;
+        // 朝相机 yaw + pitch 看 10m 远
+        const cp = Math.cos(pitch);
+        const lookFx = Math.sin(yaw) * cp;
+        const lookFy = Math.sin(pitch);
+        const lookFz = -Math.cos(yaw) * cp;
+        const fpsLX = fpsX + lookFx * 10;
+        const fpsLY = fpsY + lookFy * 10;
+        const fpsLZ = fpsZ + lookFz * 10;
 
         const t = this._fpsT;
         this.camera.position.set(
@@ -5809,6 +6554,9 @@ export class Game3D {
         window.removeEventListener('keydown', this._onKeyDown);
         window.removeEventListener('keyup', this._onKeyUp);
         window.removeEventListener('resize', this._onResize);
+        document.removeEventListener('pointerlockchange', this._onPointerLockChange);
+        document.removeEventListener('mousemove', this._onMouseMove);
+        if (document.pointerLockElement) document.exitPointerLock?.();
         this.scene.traverse(obj => {
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) {
