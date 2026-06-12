@@ -104,6 +104,107 @@ function makeToonRampTexture() {
     return tex;
 }
 
+// 雪地：冷白底 + 蓝灰起伏阴影 + 风吹雪痕 + 细碎亮晶
+function makeSnowTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f2f6fc';
+    ctx.fillRect(0, 0, 512, 512);
+    // 蓝灰柔和起伏（雪面的明暗，像被风堆出来的）
+    for (let i = 0; i < 34; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const r = 25 + Math.random() * 55;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const tone = Math.random() > 0.5 ? '198,212,232' : '255,255,255';
+        g.addColorStop(0, `rgba(${tone},0.30)`);
+        g.addColorStop(1, `rgba(${tone},0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    // 风吹雪痕（淡淡的长弧线）
+    ctx.strokeStyle = 'rgba(210,222,240,0.5)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 40; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const len = 30 + Math.random() * 70;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.quadraticCurveTo(x + len / 2, y - 4 - Math.random() * 6, x + len, y);
+        ctx.stroke();
+    }
+    // 细碎亮晶点
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for (let i = 0; i < 110; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        ctx.fillRect(x, y, 1.3, 1.3);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(14, 5.5);  // 160x60 的雪原，保持纹理接近方形
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+// 冰面：浅青底 + 放射白裂纹 + 半透明白斑 + 深处暗蓝
+function makeIceTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const base = ctx.createRadialGradient(128, 128, 10, 128, 128, 150);
+    base.addColorStop(0, '#cdeefa');
+    base.addColorStop(0.6, '#aadcee');
+    base.addColorStop(1, '#8cc4dd');
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, 256, 256);
+    // 深处暗蓝团（冰下的湖水）
+    for (let i = 0; i < 8; i++) {
+        const x = 40 + Math.random() * 176, y = 40 + Math.random() * 176;
+        const r = 15 + Math.random() * 30;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgba(70,120,165,0.30)');
+        g.addColorStop(1, 'rgba(70,120,165,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    // 白裂纹：从随机点放射出折线
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    for (let i = 0; i < 9; i++) {
+        let x = 30 + Math.random() * 196, y = 30 + Math.random() * 196;
+        let ang = Math.random() * Math.PI * 2;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        const segs = 4 + Math.floor(Math.random() * 4);
+        for (let s = 0; s < segs; s++) {
+            ang += (Math.random() - 0.5) * 1.2;
+            const len = 12 + Math.random() * 22;
+            x += Math.cos(ang) * len; y += Math.sin(ang) * len;
+            ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        // 分叉细纹
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + (Math.random() - 0.5) * 40, y + (Math.random() - 0.5) * 40);
+        ctx.stroke();
+    }
+    // 半透明白斑（雪粘在冰上）
+    for (let i = 0; i < 12; i++) {
+        const x = Math.random() * 256, y = Math.random() * 256;
+        const r = 8 + Math.random() * 18;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgba(245,250,255,0.55)');
+        g.addColorStop(1, 'rgba(245,250,255,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
 // 湖面碎波光：细小白色短横线，平铺后缓慢流动 + additive 叠加
 function makeLakeGlintTexture() {
     const canvas = document.createElement('canvas');
@@ -1562,6 +1663,7 @@ export class Game3D {
             const x = (Math.random() - 0.5) * 140;
             const z = (Math.random() - 0.5) * 140;
             if (inPath(x, z)) continue;
+            if (z < -56) continue;  // 雪原里不长蘑菇
             this._addMushroom(x, z);
         }
     }
@@ -2559,10 +2661,12 @@ export class Game3D {
     }
 
     _buildSnowBiome() {
-        // 北金星后面 (z < -60) 进入雪地，白色地+白顶松+冰湖+冰屋
+        // 北金星后面 (z < -60) 进入雪地，雪原贴图+白顶松+裂纹冰湖+冰屋
+        const snowTex = makeSnowTexture();
+        snowTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         const snowGround = new THREE.Mesh(
             new THREE.PlaneGeometry(160, 60),
-            new THREE.MeshToonMaterial({ color: 0xf0f4f8 })
+            new THREE.MeshToonMaterial({ map: snowTex })
         );
         snowGround.rotation.x = -Math.PI / 2;
         snowGround.position.set(0, 0.03, -85);
@@ -2587,24 +2691,60 @@ export class Game3D {
             this._addPineTree(x, z);
         }
 
-        // 冰湖（半径 7 的椭圆）
+        // 冰湖：裂纹冰面 + 微反光
         const icePond = new THREE.Mesh(
             new THREE.CircleGeometry(7, 32),
             new THREE.MeshStandardMaterial({
-                color: 0xb8e0f0, metalness: 0.3, roughness: 0.1,
-                transparent: true, opacity: 0.85,
+                map: makeIceTexture(),
+                metalness: 0.05, roughness: 0.45,  // 粗糙度太低会被正午太阳的镜面高光糊成一团白
             })
         );
         icePond.rotation.x = -Math.PI / 2;
         icePond.position.set(-30, 0.06, -90);
         this.scene.add(icePond);
+        // 雪堤围岸（白色，盖住冰湖和雪地的接缝）
         const iceRim = new THREE.Mesh(
-            new THREE.RingGeometry(7, 7.6, 32),
-            new THREE.MeshToonMaterial({ color: 0xa0c0d0 })
+            new THREE.RingGeometry(6.6, 8.2, 32),
+            new THREE.MeshToonMaterial({ color: 0xf6f9ff })
         );
         iceRim.rotation.x = -Math.PI / 2;
-        iceRim.position.set(-30, 0.05, -90);
+        iceRim.position.set(-30, 0.055, -90);
         this.scene.add(iceRim);
+        // 冰面碎光（复用湖面波光思路，更慢更冷）
+        this._iceGlintTex = makeLakeGlintTexture();
+        const iceGlint = new THREE.Mesh(
+            new THREE.CircleGeometry(6.8, 32),
+            new THREE.MeshBasicMaterial({
+                map: this._iceGlintTex,
+                transparent: true,
+                opacity: 0.10,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            })
+        );
+        iceGlint.rotation.x = -Math.PI / 2;
+        iceGlint.position.set(-30, 0.072, -90);
+        this.scene.add(iceGlint);
+        this.iceGlint = iceGlint;
+
+        // 雪堆（压扁的白球，错落几堆）
+        const driftMat = new THREE.MeshToonMaterial({ color: 0xf6f9ff });
+        const nearPondOrIgloo = (x, z) =>
+            Math.hypot(x + 30, z + 90) < 10 || Math.hypot(x - 30, z + 80) < 6;
+        for (let i = 0; i < 12; i++) {
+            const x = (Math.random() - 0.5) * 130;
+            const z = -64 - Math.random() * 42;
+            if (!inSnow(x, z) || nearPondOrIgloo(x, z)) continue;
+            const drift = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), driftMat);
+            const s = 0.8 + Math.random() * 1.8;
+            drift.scale.set(s, s * 0.32, s * (0.7 + Math.random() * 0.5));
+            drift.rotation.y = Math.random() * Math.PI;
+            drift.position.set(x, 0, z);
+            drift.receiveShadow = true;
+            this.scene.add(drift);
+        }
+
+        this._initSnowFX();
 
         // 冰屋（白色半球+黑洞口）
         const igloo = new THREE.Group();
@@ -2657,6 +2797,87 @@ export class Game3D {
         }
     }
 
+    // 雪区专属氛围：永驻小雪 + 雪面闪晶（不依赖全局天气）
+    _initSnowFX() {
+        // 永驻小雪：只飘在雪区上空
+        const flakeCount = 240;
+        const fp = new Float32Array(flakeCount * 3);
+        this._flakeSpeed = new Float32Array(flakeCount);
+        this._flakePhase = new Float32Array(flakeCount);
+        for (let i = 0; i < flakeCount; i++) {
+            fp[i * 3]     = (Math.random() - 0.5) * 140;
+            fp[i * 3 + 1] = Math.random() * 12;
+            fp[i * 3 + 2] = -58 - Math.random() * 50;
+            this._flakeSpeed[i] = 0.8 + Math.random() * 1.4;
+            this._flakePhase[i] = Math.random() * Math.PI * 2;
+        }
+        const flakeGeo = new THREE.BufferGeometry();
+        flakeGeo.setAttribute('position', new THREE.BufferAttribute(fp, 3));
+        this.snowFlakes = new THREE.Points(flakeGeo, new THREE.PointsMaterial({
+            color: 0xffffff, size: 0.14, transparent: true, opacity: 0.85,
+            depthWrite: false, sizeAttenuation: true,
+        }));
+        this.snowFlakes.frustumCulled = false;
+        this.scene.add(this.snowFlakes);
+
+        // 雪面闪晶：贴地小亮点，随机一颗颗闪起再熄灭（阳光下的雪晶）
+        const sparkCount = 130;
+        const sp = new Float32Array(sparkCount * 3);
+        const sc = new Float32Array(sparkCount * 3);
+        for (let i = 0; i < sparkCount; i++) {
+            sp[i * 3]     = (Math.random() - 0.5) * 150;
+            sp[i * 3 + 1] = 0.07;
+            sp[i * 3 + 2] = -60 - Math.random() * 48;
+            sc[i * 3] = sc[i * 3 + 1] = sc[i * 3 + 2] = 0.1;
+        }
+        const sparkGeo = new THREE.BufferGeometry();
+        sparkGeo.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+        sparkGeo.setAttribute('color', new THREE.BufferAttribute(sc, 3));
+        this.snowSparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({
+            size: 0.16, vertexColors: true, transparent: true, opacity: 1,
+            blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+        }));
+        this.snowSparks.frustumCulled = false;
+        this.scene.add(this.snowSparks);
+    }
+
+    _updateSnowFX(dt) {
+        if (!this.snowFlakes) return;
+        // 玩家离雪区远就整体跳过（也不渲染）
+        const nearSnow = this.player.position.z < -30;
+        this.snowFlakes.visible = nearSnow;
+        this.snowSparks.visible = nearSnow;
+        if (!nearSnow) return;
+        const t = performance.now() * 0.001;
+        // 雪花下落 + 横向轻飘
+        const fpos = this.snowFlakes.geometry.attributes.position;
+        for (let i = 0; i < fpos.count; i++) {
+            let y = fpos.getY(i) - this._flakeSpeed[i] * dt;
+            if (y < 0) y = 12;
+            fpos.setY(i, y);
+            fpos.setX(i, fpos.getX(i) + Math.sin(t * 0.8 + this._flakePhase[i]) * dt * 0.5);
+        }
+        fpos.needsUpdate = true;
+        // 闪晶：所有点缓慢变暗，每帧随机点亮几颗
+        const scol = this.snowSparks.geometry.attributes.color;
+        const arr = scol.array;
+        for (let i = 0; i < arr.length; i++) arr[i] *= (1 - dt * 2.2);
+        const dayness = this._lastDayness ?? 1;
+        for (let k = 0; k < 2; k++) {
+            if (Math.random() < 0.5 + dayness * 0.5) {
+                const i = Math.floor(Math.random() * scol.count) * 3;
+                const b = 0.6 + 0.4 * dayness;
+                arr[i] = b; arr[i + 1] = b; arr[i + 2] = b * 1.05;
+            }
+        }
+        scol.needsUpdate = true;
+        // 冰面碎光缓慢流动
+        if (this._iceGlintTex) {
+            this._iceGlintTex.offset.x += dt * 0.008;
+            this._iceGlintTex.offset.y += dt * 0.005;
+        }
+    }
+
     _addPineTree(x, z) {
         const group = new THREE.Group();
         const trunkH = 1.5 + Math.random() * 0.4;
@@ -2668,9 +2889,9 @@ export class Game3D {
         trunk.castShadow = true;
         addOutline(trunk, 0.05);
         group.add(trunk);
-        // 3 层圆锥（深绿+白顶）
+        // 3 层圆锥（深绿+厚雪挂）
         const greenMat = new THREE.MeshToonMaterial({ color: 0x2a6a3a });
-        const snowMat = new THREE.MeshToonMaterial({ color: 0xffffff });
+        const snowMat = new THREE.MeshToonMaterial({ color: 0xf4f8ff });
         const layers = 3;
         let y = trunkH;
         for (let i = layers - 1; i >= 0; i--) {
@@ -2684,12 +2905,12 @@ export class Game3D {
             cone.castShadow = true;
             addOutline(cone, 0.04);
             group.add(cone);
-            // 雪盖：略薄一层在锥体上方
+            // 雪挂：宽扁的雪锥压在每层上沿（像真的积了厚雪）
             const snowCap = new THREE.Mesh(
-                new THREE.ConeGeometry(r * 0.45, h * 0.35, 10),
+                new THREE.ConeGeometry(r * 0.88, h * 0.42, 10),
                 snowMat
             );
-            snowCap.position.y = y + h * 0.85;
+            snowCap.position.y = y + h * 0.72;
             group.add(snowCap);
             y += h * 0.8;
         }
@@ -5397,6 +5618,7 @@ export class Game3D {
             const x = (Math.random() - 0.5) * 150;
             const z = (Math.random() - 0.5) * 150;
             if (inPath(x, z)) continue;
+            if (z < -56) continue;  // 雪原里不长草（绿草叶从雪里穿出来很穿帮）
             dummy.position.set(x, 0, z);
             dummy.rotation.y = Math.random() * Math.PI;
             dummy.scale.setScalar(0.7 + Math.random() * 0.7);
@@ -5700,6 +5922,7 @@ export class Game3D {
             const x = Math.cos(ang) * r;
             const z = Math.sin(ang) * r;
             if (inPath(x, z)) continue;
+            if (z < -56) { this._addPineTree(x, z); continue; }  // 雪原里只长雪松
             this._addTree(x, z);
         }
     }
@@ -5834,6 +6057,7 @@ export class Game3D {
             const z = (Math.random() - 0.5) * 160;
             if (inPath(x, z)) continue;
             const t = Math.random();
+            if (z < -56) { this._addStone(x, z); continue; }  // 雪原里只有石头，花/灌木不长
             if (t < 0.4)       this._addStone(x, z);
             else if (t < 0.75) this._addFlower(x, z);
             else               this._addBush(x, z);
@@ -5980,15 +6204,21 @@ export class Game3D {
     _addDistantHills() {
         const hillMat = new THREE.MeshToonMaterial({ color: 0x9d8acc });
         const hillMatFar = new THREE.MeshToonMaterial({ color: 0xbaa6db });
+        // 雪区那侧的山换成雪山色（冷白蓝），跟雪原连成一片
+        const snowHillMat = new THREE.MeshToonMaterial({ color: 0xdfe9f5 });
+        const snowHillMatFar = new THREE.MeshToonMaterial({ color: 0xedf3fa });
         for (let i = 0; i < 14; i++) {
             const angle = (i / 14) * Math.PI * 2;
             const radius = 90 + Math.random() * 15;
             const size = 8 + Math.random() * 6;
             const cx = Math.cos(angle) * radius;
             const cz = Math.sin(angle) * radius;
+            const isSnowSide = cz < -55;
             const hill = new THREE.Mesh(
                 new THREE.SphereGeometry(size, 10, 6),
-                Math.random() > 0.5 ? hillMat : hillMatFar
+                Math.random() > 0.5
+                    ? (isSnowSide ? snowHillMat : hillMat)
+                    : (isSnowSide ? snowHillMatFar : hillMatFar)
             );
             hill.position.set(cx, -size * 0.4, cz);
             this.scene.add(hill);
@@ -6270,6 +6500,7 @@ export class Game3D {
         this._updateFireflies(dt);
         this._updateDayMotes(dt);
         this._updateLakeGlint(dt);
+        this._updateSnowFX(dt);
         this._updateBunnies(dt);
         this._updateRipples(dt);
         this._updateLampposts();
@@ -6542,6 +6773,15 @@ export class Game3D {
         fogC.copy(this._skyUniforms.uHorNight.value)
             .lerp(this._skyUniforms.uHorDay.value, skyDay)
             .lerp(this._skyUniforms.uHorSet.value, setness * 0.85);
+        // 雪原冷雾：人走进北边雪区，雾色渐渐转成冰蓝（空气也"变冷"）
+        const pz = this.player ? this.player.position.z : 0;
+        const snowK = THREE.MathUtils.smoothstep(-pz, 50, 66);
+        if (snowK > 0) {
+            if (!this._tmpColor4) this._tmpColor4 = new THREE.Color();
+            const icy = this._tmpColor4.setRGB(0.80, 0.88, 0.97)
+                .multiplyScalar(0.25 + 0.75 * skyDay);  // 夜里冷雾也得是暗的
+            fogC.lerp(icy, snowK * 0.75);
+        }
         this.scene.fog.color.copy(fogC);
         // 云染色：白天白、黄昏橘粉、夜里暗蓝
         if (this.skyClouds) {
