@@ -3,7 +3,7 @@ import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const URL = 'http://localhost:8081/';
+const URL = 'http://localhost:8080/';
 const OUT = 'D:\\IdeProject\\egg-game\\scripts\\out';
 
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });

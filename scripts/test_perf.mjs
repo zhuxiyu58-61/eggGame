@@ -3,7 +3,7 @@
 import puppeteer from 'puppeteer-core';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const URL = 'http://localhost:8081/';
+const URL = 'http://localhost:8080/';
 const RECORD_SECONDS = 30;
 
 const browser = await puppeteer.launch({

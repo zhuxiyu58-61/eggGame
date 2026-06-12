@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { loadStyle, hexToInt } from './style';
 
@@ -34,30 +35,53 @@ function addOutline(mesh, thickness = OUTLINE_THICK, sourceColor = null) {
 // ===== 纹理生成器（CanvasTexture，零外部素材依赖）=====
 function makeGrassTexture() {
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 256;
+    canvas.width = canvas.height = 512;
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#8fcf8f';
-    ctx.fillRect(0, 0, 256, 256);
+    ctx.fillRect(0, 0, 512, 512);
+    // 大块明暗起伏（柔和大斑，打底层次）
+    for (let i = 0; i < 26; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const r = 30 + Math.random() * 60;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const tone = Math.random() > 0.5 ? '125,190,125' : '155,215,150';
+        g.addColorStop(0, `rgba(${tone},0.35)`);
+        g.addColorStop(1, `rgba(${tone},0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
     // 深绿斑块
     ctx.fillStyle = '#6cb56c';
-    for (let i = 0; i < 90; i++) {
-        const x = Math.random() * 256, y = Math.random() * 256;
-        const r = 3 + Math.random() * 9;
+    for (let i = 0; i < 320; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const r = 4 + Math.random() * 14;
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     }
     // 亮绿点
     ctx.fillStyle = '#aae5aa';
-    for (let i = 0; i < 70; i++) {
-        const x = Math.random() * 256, y = Math.random() * 256;
-        const r = 2 + Math.random() * 4;
+    for (let i = 0; i < 260; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const r = 3 + Math.random() * 6;
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    // 草叶短笔触（顺势小竖线，远看是茸茸质感）
+    ctx.strokeStyle = 'rgba(90,150,90,0.5)';
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 420; i++) {
+        const x = Math.random() * 512, y = Math.random() * 512;
+        const len = 3 + Math.random() * 5;
+        const lean = (Math.random() - 0.5) * 3;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + lean, y - len);
+        ctx.stroke();
     }
     // 野花碎点（黄/白/粉）
     const flowerColors = ['#ffd966', '#ffffff', '#ffb6c1'];
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 160; i++) {
         ctx.fillStyle = flowerColors[i % 3];
-        const x = Math.random() * 256, y = Math.random() * 256;
-        ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI * 2); ctx.fill();
+        const x = Math.random() * 512, y = Math.random() * 512;
+        ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI * 2); ctx.fill();
     }
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -66,21 +90,40 @@ function makeGrassTexture() {
     return tex;
 }
 
-function makeSkyGradientTexture() {
+// 三阶赛璐璐光影 ramp：暗部/中间调/亮部，所有 MeshToonMaterial 共享
+function makeToonRampTexture() {
+    const data = new Uint8Array([
+        128, 128, 128, 255,   // 暗部 50%
+        198, 198, 198, 255,   // 中间调 78%
+        255, 255, 255, 255,   // 亮部
+    ]);
+    const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.needsUpdate = true;
+    return tex;
+}
+
+// 湖面碎波光：细小白色短横线，平铺后缓慢流动 + additive 叠加
+function makeLakeGlintTexture() {
     const canvas = document.createElement('canvas');
-    canvas.width = 32; canvas.height = 256;
+    canvas.width = canvas.height = 128;
     const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0,    '#5fb3e5'); // 天顶深蓝
-    grad.addColorStop(0.45, '#a3d7ee'); // 高空浅蓝
-    grad.addColorStop(0.55, '#d8ecf5'); // 地平线雾色
-    grad.addColorStop(0.7,  '#ffd9c2'); // 远天暖
-    grad.addColorStop(1,    '#ffb997'); // 视线下方（地面挡住看不到）
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 32, 256);
+    ctx.clearRect(0, 0, 128, 128);
+    for (let i = 0; i < 38; i++) {
+        const x = Math.random() * 128, y = Math.random() * 128;
+        const w = 3 + Math.random() * 8;
+        const a = 0.25 + Math.random() * 0.5;
+        ctx.strokeStyle = `rgba(255,255,255,${a})`;
+        ctx.lineWidth = 1 + Math.random();
+        ctx.beginPath();
+        ctx.moveTo(x - w / 2, y);
+        ctx.lineTo(x + w / 2, y);
+        ctx.stroke();
+    }
     const tex = new THREE.CanvasTexture(canvas);
-    tex.mapping = THREE.EquirectangularReflectionMapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(3, 3);
     return tex;
 }
 
@@ -101,43 +144,46 @@ function makeBubbleTexture(text) {
     canvas.width = 384; canvas.height = 112;
     const ctx = canvas.getContext('2d');
     // 阴影
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
     if (ctx.roundRect) {
         ctx.beginPath(); ctx.roundRect(12, 18, 360, 72, 18); ctx.fill();
     } else {
         ctx.fillRect(12, 18, 360, 72);
     }
-    // 白底
-    ctx.fillStyle = '#ffffff';
+    // 羊皮纸底（亮度低于 bloom 阈值 0.72，避免被发光晕染糊掉文字）
+    const bubbleBg = '#b8ad94';
+    ctx.fillStyle = bubbleBg;
     if (ctx.roundRect) {
         ctx.beginPath(); ctx.roundRect(8, 14, 360, 68, 18); ctx.fill();
     } else {
         ctx.fillRect(8, 14, 360, 68);
     }
     // 边框
-    ctx.strokeStyle = '#2c2c54';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 4;
     if (ctx.roundRect) {
         ctx.beginPath(); ctx.roundRect(8, 14, 360, 68, 18); ctx.stroke();
     } else {
         ctx.strokeRect(8, 14, 360, 68);
     }
     // 气泡小尖（下边中间）
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = bubbleBg;
     ctx.beginPath();
     ctx.moveTo(178, 82);
     ctx.lineTo(192, 102);
     ctx.lineTo(206, 82);
     ctx.closePath();
     ctx.fill();
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(178, 82);
     ctx.lineTo(192, 102);
     ctx.lineTo(206, 82);
     ctx.stroke();
-    // 文字
-    ctx.fillStyle = '#2c2c54';
-    ctx.font = 'bold 26px "Microsoft YaHei", sans-serif';
+    // 文字（深色 + 粗体，羊皮纸底上对比足够）
+    ctx.fillStyle = '#1a1a2e';
+    ctx.font = 'bold 28px "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, 192, 48);
@@ -330,8 +376,32 @@ export class Game3D {
         this.container.appendChild(this.renderer.domElement);
 
         this.scene = new THREE.Scene();
-        this.scene.background = makeSkyGradientTexture(); // 渐变天空（天顶蓝→地平线暖）
-        this.scene.fog = new THREE.Fog('#d8ecf5', 40, 110);
+        this.scene.fog = new THREE.Fog('#d8ecf5', 58, 150);
+
+        // 所有 MeshToonMaterial 自动挂三阶 ramp（真赛璐璐分层光影）
+        // 包一层 scene.add：后续无论谁创建的物体，进场景时统一打补丁
+        this._toonRamp = makeToonRampTexture();
+        const patchToon = (obj) => {
+            if (!obj || !obj.traverse) return;
+            obj.traverse(o => {
+                const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+                mats.forEach(m => {
+                    if (m.isMeshToonMaterial && !m.gradientMap) {
+                        m.gradientMap = this._toonRamp;
+                        m.needsUpdate = true;
+                    }
+                });
+            });
+        };
+        const origSceneAdd = this.scene.add.bind(this.scene);
+        this.scene.add = (...objs) => {
+            objs.forEach(patchToon);
+            return origSceneAdd(...objs);
+        };
+        this._patchToon = patchToon;  // 周期兜底：挂到已入场景物体上的新材质
+
+        // 动态天空穹顶（shader 渐变 + 太阳/月亮大气晕，随昼夜插值）
+        this._createSkyDome();
 
         this.camera = new THREE.PerspectiveCamera(
             72, window.innerWidth / window.innerHeight, 0.1, 200
@@ -359,6 +429,10 @@ export class Game3D {
         // 反光（蓝天→草地）
         this.hemi = new THREE.HemisphereLight(0xbde0ff, 0x5a8a3a, 0.35);
         this.scene.add(this.hemi);
+        // 冷色补光：永远在太阳对面，背光面不死黑、轮廓更立体；夜里它就是月光
+        this.fillLight = new THREE.DirectionalLight(0x9db8ff, 0.25);
+        this.fillLight.position.set(-22, 24, -18);
+        this.scene.add(this.fillLight);
 
         // 昼夜循环状态
         this.dayPhase = 0.35;     // 开局时间：上午（0=半夜，0.25=日出，0.5=正午，0.75=日落）
@@ -397,17 +471,109 @@ export class Game3D {
             new THREE.Vector2(window.innerWidth * 0.5, window.innerHeight * 0.5),
             0.85,  // strength
             0.5,   // radius
-            0.72   // threshold（只让"亮过 0.72"的像素晕染）
+            0.82   // threshold（收紧：白天的白云/亮天不晕染，夜里灯火和星星照常发光）
         );
         this.composer.addPass(this.bloomPass);
+        // 色彩分级：饱和度提升 + 轻 S 曲线 + 阴影偏冷/高光偏暖 + 暗角（一个全屏 pass，开销极小）
+        this.gradePass = new ShaderPass({
+            uniforms: {
+                tDiffuse: { value: null },
+            },
+            vertexShader: /* glsl */`
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: /* glsl */`
+                uniform sampler2D tDiffuse;
+                varying vec2 vUv;
+                void main() {
+                    vec4 tex = texture2D(tDiffuse, vUv);
+                    vec3 col = tex.rgb;
+                    float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+                    // 饱和度 +14%
+                    col = mix(vec3(l), col, 1.14);
+                    // 轻 S 曲线（只对 0..1 区间塑形，HDR 高光不动）
+                    vec3 cc = clamp(col, 0.0, 1.0);
+                    col = mix(col, cc * cc * (3.0 - 2.0 * cc), 0.16);
+                    // split tone：阴影偏冷蓝、高光偏暖（电影感的关键一笔，量要小）
+                    float w = smoothstep(0.0, 0.9, l);
+                    col += (1.0 - w) * vec3(-0.010, 0.002, 0.022)
+                         +        w  * vec3( 0.020, 0.009, -0.012);
+                    // 柔和暗角
+                    vec2 q = vUv - 0.5;
+                    col *= 1.0 - dot(q, q) * 0.45;
+                    gl_FragColor = vec4(max(col, 0.0), tex.a);
+                }
+            `,
+        });
+        this.composer.addPass(this.gradePass);
         this.composer.addPass(new OutputPass());
+    }
+
+    _createSkyDome() {
+        this._skyUniforms = {
+            uTopDay:   { value: new THREE.Color('#3f93dd') },
+            uHorDay:   { value: new THREE.Color('#c2e3f2') },
+            uTopSet:   { value: new THREE.Color('#5a5a96') },
+            uHorSet:   { value: new THREE.Color('#ff9e62') },
+            uTopNight: { value: new THREE.Color('#10173a') },
+            uHorNight: { value: new THREE.Color('#283458') },
+            uSunDir:   { value: new THREE.Vector3(0, 1, 0) },
+            uDayness:  { value: 1 },
+            uSetness:  { value: 0 },
+        };
+        const skyMat = new THREE.ShaderMaterial({
+            side: THREE.BackSide,
+            depthWrite: false,
+            uniforms: this._skyUniforms,
+            vertexShader: /* glsl */`
+                varying vec3 vDir;
+                void main() {
+                    vDir = position;  // 球心永远在相机上，物体坐标即视线方向
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: /* glsl */`
+                uniform vec3 uTopDay, uHorDay, uTopSet, uHorSet, uTopNight, uHorNight;
+                uniform vec3 uSunDir;
+                uniform float uDayness, uSetness;
+                varying vec3 vDir;
+                void main() {
+                    vec3 d = normalize(vDir);
+                    // 1=地平线, 0=天顶
+                    float t = pow(1.0 - clamp(d.y, 0.0, 1.0), 1.5);
+                    vec3 top = mix(uTopNight, uTopDay, uDayness);
+                    vec3 hor = mix(uHorNight, uHorDay, uDayness);
+                    top = mix(top, uTopSet, uSetness * 0.8);
+                    hor = mix(hor, uHorSet, uSetness);
+                    vec3 col = mix(top, hor, t);
+                    float sd = max(dot(d, uSunDir), 0.0);
+                    // 日出/日落：太阳侧整片暖晕（贴地平线最浓）
+                    col += uSetness * vec3(1.0, 0.42, 0.14) * pow(sd, 3.0) * (0.25 + 0.75 * t) * 0.55;
+                    // 白天：太阳周围柔光
+                    col += uDayness * vec3(1.0, 0.92, 0.72) * pow(sd, 22.0) * 0.4;
+                    // 夜晚：月亮（太阳反方向）周围冷晕
+                    float md = max(dot(d, -uSunDir), 0.0);
+                    col += (1.0 - uDayness) * vec3(0.45, 0.58, 0.85) * pow(md, 16.0) * 0.22;
+                    gl_FragColor = vec4(col, 1.0);
+                }
+            `,
+        });
+        this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(140, 32, 20), skyMat);
+        this.skyDome.frustumCulled = false;
+        this.scene.add(this.skyDome);
     }
 
     _buildWorld() {
         // 大地面：草地噪声纹理 + 重复 22 次
+        const grassTex = makeGrassTexture();
+        grassTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         const ground = new THREE.Mesh(
             new THREE.PlaneGeometry(220, 220),
-            new THREE.MeshToonMaterial({ map: makeGrassTexture() })
+            new THREE.MeshToonMaterial({ map: grassTex })
         );
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
@@ -441,31 +607,6 @@ export class Game3D {
             this.scene.add(path);
             this.paths[p.name] = path;
         });
-
-        // 路口指示牌
-        this._addSignpost(0, -7, '北 · 红刺密林');
-        this._addSignpost(7, 0, '东 · 跳跳台阶');
-        this._addSignpost(-7, 0, '西 · 混合冒险');
-
-        // 障碍/倒刺布局
-        // 北：纯红刺挑战
-        this._createSpikeCluster(0, -13, 1, 3);
-        this._createSpikeCluster(0, -22, 2, 3);
-        this._createSpikeCluster(0, -32, 1, 4);
-        // 东：跳跳台阶
-        this._createBlock(13, 0, 2, 1.0, 2);
-        this._createBlock(20, 0, 2, 1.6, 2);
-        this._createBlock(28, 0, 2, 1.0, 2);
-        this._createSpikeCluster(35, 0, 1, 3);
-        // 西：混合
-        this._createBlock(-14, 0, 2, 1.2, 2);
-        this._createSpikeCluster(-21, 0, 2, 2);
-        this._createBlock(-30, 0, 2, 1.6, 2);
-
-        // 三个终点（不同颜色）
-        this._createGoal(0, -42, 0xffd700, '北方金星');
-        this._createGoal(42, 0, 0xff66cc, '东方粉星');
-        this._createGoal(-42, 0, 0x66ddff, '西方蓝星');
 
         // 远景装饰：一圈小山
         this._addDistantHills();
@@ -505,6 +646,7 @@ export class Game3D {
         this._initAudio();
         this._initSmoke();
         this._initFireflies();
+        this._createDayMotes();
         this._buildBunnies();
         this._buildBenches();
         this._buildLampposts();
@@ -552,10 +694,6 @@ export class Game3D {
         this._initExtraction();
         this._buildChests();
         this._buildMonsters();
-
-        // 通关标记应用到已完成的路 + 全通后解锁伙伴
-        this._applyWonGoals();
-        this._maybeSpawnCompanion();
     }
 
     _buildHouses() {
@@ -831,11 +969,16 @@ export class Game3D {
         if (!this.houses) return;
         const p = this.player.position;
         let anyInside = false;
+        let activeDoor = null;
         for (const h of this.houses) {
             const inside =
                 p.x > h.min.x && p.x < h.max.x &&
                 p.z > h.min.z && p.z < h.max.z;
-            if (inside) anyInside = true;
+            if (inside) {
+                anyInside = true;
+                // 门在 +Z 方向墙正中
+                activeDoor = { x: (h.min.x + h.max.x) / 2, z: h.max.z };
+            }
             // 进门/出门音效
             if (inside !== h.wasInside) {
                 this._playChime();
@@ -857,6 +1000,34 @@ export class Game3D {
             }
         }
         this.isInsideHouse = anyInside;
+        this.activeHouseDoor = activeDoor;
+        this._updateExitArrow();
+    }
+
+    _updateExitArrow() {
+        if (!this._exitArrowEl) {
+            this._exitArrowEl = document.getElementById('exit-arrow');
+            this._exitArrowIcon = this._exitArrowEl?.querySelector('.arrow');
+        }
+        const el = this._exitArrowEl;
+        if (!el) return;
+        if (!this.activeHouseDoor) {
+            el.classList.remove('visible');
+            return;
+        }
+        const p = this.player.position;
+        const dx = this.activeHouseDoor.x - p.x;
+        const dz = this.activeHouseDoor.z - p.z;
+        // 把世界方向投影到相机坐标（cameraYaw=0 时相机前方 = -Z）
+        const yaw = this.cameraYaw || 0;
+        const fwdProj  = dx * Math.sin(yaw) + dz * -Math.cos(yaw);
+        const rightProj = dx * Math.cos(yaw) + dz *  Math.sin(yaw);
+        // screenAngle: 0 = 正前方(↑), π/2 = 右(→), -π/2 = 左(←), π = 身后(↓)
+        const screenAngle = Math.atan2(rightProj, fwdProj);
+        el.classList.add('visible');
+        if (this._exitArrowIcon) {
+            this._exitArrowIcon.style.transform = `rotate(${screenAngle}rad)`;
+        }
     }
 
     _playChime() {
@@ -1019,6 +1190,58 @@ export class Game3D {
             f.material.emissiveIntensity = 2.5 * flicker * nightness;
             f.visible = nightness > 0.05;
         });
+    }
+
+    // 白天的漂浮光尘/花粉：阳光里慢慢飘的小亮点（夜里淡出，交班给萤火虫）
+    _createDayMotes() {
+        const count = 90;
+        this._moteData = [];
+        const positions = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+            this._moteData.push({
+                ox: (Math.random() - 0.5) * 44,
+                oz: (Math.random() - 0.5) * 44,
+                y: 0.4 + Math.random() * 3.6,
+                amp: 0.3 + Math.random() * 0.7,
+                speed: 0.15 + Math.random() * 0.35,
+                phase: Math.random() * Math.PI * 2,
+            });
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        this.dayMotes = new THREE.Points(geo, new THREE.PointsMaterial({
+            color: 0xfff8e0,
+            size: 0.10,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            sizeAttenuation: true,
+        }));
+        this.dayMotes.frustumCulled = false;
+        this.scene.add(this.dayMotes);
+    }
+
+    _updateDayMotes(dt) {
+        if (!this.dayMotes) return;
+        const dayness = this._lastDayness ?? 1;
+        const vis = dayness > 0.04 && !this.isInsideHouse;
+        this.dayMotes.visible = vis;
+        this.dayMotes.material.opacity = 0.35 * dayness;
+        if (!vis) return;
+        const t = performance.now() * 0.001;
+        const p = this.player.position;
+        const pos = this.dayMotes.geometry.attributes.position;
+        for (let i = 0; i < this._moteData.length; i++) {
+            const m = this._moteData[i];
+            // 围着玩家的 44x44 区域取模平移，走到哪儿光尘飘到哪儿
+            let x = m.ox + Math.sin(t * m.speed + m.phase) * m.amp + t * 0.25;
+            let z = m.oz + Math.cos(t * m.speed * 0.8 + m.phase) * m.amp;
+            x = ((x - p.x + 22) % 44 + 44) % 44 - 22 + p.x;
+            z = ((z - p.z + 22) % 44 + 44) % 44 - 22 + p.z;
+            const y = m.y + Math.sin(t * m.speed * 1.4 + m.phase) * 0.25;
+            pos.setXYZ(i, x, y, z);
+        }
+        pos.needsUpdate = true;
     }
 
     _buildBunnies() {
@@ -3212,36 +3435,86 @@ export class Game3D {
     }
 
     _addChest(x, z) {
+        // 外观随机：6 种样式，与 _rollLoot 独立 —— 不能通过外观预判内容
+        const styles = [
+            { body:0x8a5a2e, lid:0x6a3a1a, band:0xc89020, bands:2, lock:'rect',  lockColor:0xc89020 },  // 经典橡木金边
+            { body:0x4a4a52, lid:0x2a2a32, band:0xa0a0a8, bands:2, lock:'rect',  lockColor:0xa0a0a8, studs:true },  // 黑铁箱（铆钉）
+            { body:0xb89060, lid:0x9a7048, band:null,     bands:0, lock:'round', lockColor:0x6a4a2a, strap:true },  // 旧皮带木箱
+            { body:0xa0c8b0, lid:0x80a890, band:0xddc060, bands:1, lock:'round', lockColor:0xddc060 },  // 玉色镶金
+            { body:0x6e2826, lid:0x4a1816, band:0xd4a830, bands:0, lock:'cross', lockColor:0xd4a830, strap:true },  // 暗红海盗
+            { body:0xd0c098, lid:0xb09870, band:0x6a4a2a, bands:1, lock:'rect',  lockColor:0x6a4a2a },  // 浅木简朴
+        ];
+        const s = styles[Math.floor(Math.random() * styles.length)];
+
         const group = new THREE.Group();
         const body = new THREE.Mesh(
             new THREE.BoxGeometry(0.9, 0.55, 0.65),
-            new THREE.MeshToonMaterial({ color: 0x8a5a2e })
+            new THREE.MeshToonMaterial({ color: s.body })
         );
         body.position.y = 0.275;
         body.castShadow = true;
         addOutline(body, 0.03);
         group.add(body);
-        // 金边
-        const bandMat = new THREE.MeshToonMaterial({ color: 0xc89020 });
-        const band = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
-        band.position.y = 0.12;
-        group.add(band);
-        const band2 = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
-        band2.position.y = 0.44;
-        group.add(band2);
-        // 锁
-        const lock = new THREE.Mesh(
-            new THREE.BoxGeometry(0.14, 0.18, 0.08),
-            new THREE.MeshToonMaterial({ color: 0xc89020 })
-        );
-        lock.position.set(0, 0.42, 0.36);
-        group.add(lock);
+        // 横向边带（0/1/2 条）
+        if (s.band && s.bands > 0) {
+            const bandMat = new THREE.MeshToonMaterial({ color: s.band });
+            const band = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
+            band.position.y = 0.12;
+            group.add(band);
+            if (s.bands >= 2) {
+                const band2 = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.04, 0.66), bandMat);
+                band2.position.y = 0.44;
+                group.add(band2);
+            }
+        }
+        // 四角铆钉（铁箱专属）
+        if (s.studs) {
+            const studMat = new THREE.MeshToonMaterial({ color: s.band || 0xa0a0a8 });
+            const studGeo = new THREE.SphereGeometry(0.045, 6, 4);
+            for (const [sx, sy] of [[-0.4, 0.07], [0.4, 0.07], [-0.4, 0.47], [0.4, 0.47]]) {
+                const stud = new THREE.Mesh(studGeo, studMat);
+                stud.position.set(sx, sy, 0.33);
+                group.add(stud);
+            }
+        }
+        // 皮带（旧/海盗箱）
+        if (s.strap) {
+            const strapMat = new THREE.MeshToonMaterial({ color: 0x4a2818 });
+            const strapV = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.55, 0.04), strapMat);
+            strapV.position.set(0, 0.275, 0.34);
+            group.add(strapV);
+            const strapH = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.04), strapMat);
+            strapH.position.set(0, 0.30, 0.34);
+            group.add(strapH);
+        }
+        // 锁：方/圆/十字
+        let lock;
+        if (s.lock === 'rect') {
+            lock = new THREE.Mesh(
+                new THREE.BoxGeometry(0.14, 0.18, 0.08),
+                new THREE.MeshToonMaterial({ color: s.lockColor })
+            );
+        } else if (s.lock === 'round') {
+            lock = new THREE.Mesh(
+                new THREE.SphereGeometry(0.10, 10, 8),
+                new THREE.MeshToonMaterial({ color: s.lockColor })
+            );
+        } else if (s.lock === 'cross') {
+            lock = new THREE.Group();
+            const lm = new THREE.MeshToonMaterial({ color: s.lockColor });
+            lock.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.22, 0.04), lm));
+            lock.add(new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.04), lm));
+        }
+        if (lock) {
+            lock.position.set(0, 0.42, 0.36);
+            group.add(lock);
+        }
         // 盖子（pivot 在后铰链处）
         const lidPivot = new THREE.Group();
         lidPivot.position.set(0, 0.55, -0.325);
         const lid = new THREE.Mesh(
             new THREE.BoxGeometry(0.9, 0.18, 0.65),
-            new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+            new THREE.MeshToonMaterial({ color: s.lid })
         );
         lid.position.set(0, 0.09, 0.325);
         lid.castShadow = true;
@@ -3744,7 +4017,6 @@ export class Game3D {
             { id: 'first_star',       label: '⭐ 收集第一颗星' },
             { id: 'all_stars',        label: '🌟 24 颗星全收' },
             { id: 'all_greet',        label: '👋 全村好朋友' },
-            { id: 'all_goals',        label: '🏆 三方全通' },
             { id: 'see_meteor',       label: '☄️ 看见流星' },
             { id: 'see_rainbow',      label: '🌈 看见彩虹' },
             { id: 'see_lightning',    label: '⚡ 经历雷雨' },
@@ -4791,6 +5063,32 @@ export class Game3D {
         rim.rotation.x = -Math.PI / 2;
         rim.position.set(x, 0.055, z);
         this.scene.add(rim);
+
+        // 流动碎波光：additive 白色细纹叠在反射面上，缓慢错速流动
+        this._lakeGlintTex = makeLakeGlintTexture();
+        const glint = new THREE.Mesh(
+            new THREE.CircleGeometry(radius * 0.97, 48),
+            new THREE.MeshBasicMaterial({
+                map: this._lakeGlintTex,
+                transparent: true,
+                opacity: 0.22,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            })
+        );
+        glint.rotation.x = -Math.PI / 2;
+        glint.position.set(x, 0.072, z);
+        this.scene.add(glint);
+        this.lakeGlint = glint;
+    }
+
+    _updateLakeGlint(dt) {
+        if (!this._lakeGlintTex) return;
+        this._lakeGlintTex.offset.x += dt * 0.018;
+        this._lakeGlintTex.offset.y += dt * 0.011;
+        const dayness = this._lastDayness ?? 1;
+        // 白天闪、夜里月光下弱闪
+        this.lakeGlint.material.opacity = 0.08 + 0.18 * dayness;
     }
 
     _initLightning() {
@@ -5114,26 +5412,6 @@ export class Game3D {
         this.scene.add(grass);
     }
 
-    _maybeSpawnCompanion() {
-        const won = this._loadWonGoals();
-        if (won.length < this.goals.length) return;
-
-        const tex = makeButterflyTexture('#ffe066');
-        const mat = new THREE.SpriteMaterial({
-            map: tex,
-            transparent: true,
-            depthWrite: false,
-        });
-        this.companion = new THREE.Sprite(mat);
-        this.companion.scale.set(0.95, 0.95, 1);
-        this.companion.position.copy(this.player.position);
-        this.scene.add(this.companion);
-
-        // 跟随的金色软光
-        this.companionLight = new THREE.PointLight(0xffd966, 1.0, 5, 1.6);
-        this.scene.add(this.companionLight);
-    }
-
     _updateCompanion(dt) {
         if (!this.companion) return;
         const t = performance.now() * 0.001;
@@ -5400,38 +5678,6 @@ export class Game3D {
                 f.group.scale.setScalar(1);
             }
             if (f.cooldown > 0) f.cooldown -= dt;
-        }
-    }
-
-    _applyWonGoals() {
-        const won = this._loadWonGoals();
-        if (won.length === 0) return;
-        // 把已通关的星调暗 + 对应路染金
-        this.goals.forEach(g => {
-            if (won.includes(g.name)) {
-                g.star.material.emissiveIntensity = 0.4;
-                g.star.material.color.setHex(0xeed694);
-                g.won = true;
-            }
-        });
-        Object.entries(this.paths || {}).forEach(([name, mesh]) => {
-            if (won.includes(name)) {
-                mesh.material.color.setHex(0xf5d36a);
-            }
-        });
-    }
-
-    _loadWonGoals() {
-        try {
-            return JSON.parse(localStorage.getItem('eggGameWonGoals') || '[]');
-        } catch (e) { return []; }
-    }
-
-    _saveWonGoal(name) {
-        const won = this._loadWonGoals();
-        if (!won.includes(name)) {
-            won.push(name);
-            try { localStorage.setItem('eggGameWonGoals', JSON.stringify(won)); } catch (e) {}
         }
     }
 
@@ -5731,55 +5977,6 @@ export class Game3D {
         });
     }
 
-    _addSignpost(x, z, label) {
-        // 木牌：暖木色底（亮度低于 bloom 阈值，不发光）+ 粗黑字 + 深棕边框
-        const canvas = document.createElement('canvas');
-        canvas.width = 384; canvas.height = 144;
-        const ctx = canvas.getContext('2d');
-        // 木色底（高斯下采样减轻bloom）
-        ctx.fillStyle = '#c89868';
-        ctx.fillRect(0, 0, 384, 144);
-        // 木纹斜线
-        ctx.strokeStyle = '#a67a4a';
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 6; i++) {
-            const y = 20 + i * 22;
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(384, y + 4); ctx.stroke();
-        }
-        // 深棕边框（双层显厚）
-        ctx.strokeStyle = '#5a3a1a';
-        ctx.lineWidth = 8;
-        ctx.strokeRect(4, 4, 376, 136);
-        // 字：粗黑 + 描白边提高对比
-        ctx.font = 'bold 50px "Microsoft YaHei", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 5;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(label, 192, 76);
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillText(label, 192, 76);
-
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        const sprMat = new THREE.SpriteMaterial({ map: tex, depthWrite: false });
-        const sprite = new THREE.Sprite(sprMat);
-        sprite.scale.set(3.6, 1.35, 1);
-        sprite.position.set(x, 2.6, z);
-        this.scene.add(sprite);
-
-        // 木杆
-        const pole = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.08, 0.08, 2.6, 8),
-            new THREE.MeshToonMaterial({ color: 0x8a5a2e })
-        );
-        pole.position.set(x, 1.3, z);
-        pole.castShadow = true;
-        addOutline(pole, 0.04);
-        this.scene.add(pole);
-    }
-
     _addDistantHills() {
         const hillMat = new THREE.MeshToonMaterial({ color: 0x9d8acc });
         const hillMatFar = new THREE.MeshToonMaterial({ color: 0xbaa6db });
@@ -5802,92 +5999,6 @@ export class Game3D {
                 max: new THREE.Vector3(cx + r, size * 0.6, cz + r),
             });
         }
-    }
-
-    _createBlock(x, z, sx, sy, sz) {
-        const mat = new THREE.MeshToonMaterial({ color: 0x9aa0a8 });
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-        mesh.position.set(x, sy / 2, z);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        addOutline(mesh);
-        this.scene.add(mesh);
-        this.obstacles.push({
-            min: new THREE.Vector3(x - sx / 2, 0, z - sz / 2),
-            max: new THREE.Vector3(x + sx / 2, sy, z + sz / 2),
-        });
-    }
-
-    _createSpikeCluster(cx, cz, sizeX, sizeZ) {
-        const spikeMat = new THREE.MeshToonMaterial({ color: 0xd63031 });
-        const baseMat = new THREE.MeshToonMaterial({ color: 0x4a0e0e });
-        const spacing = 1.0;
-        const h = 1.0;
-        const baseR = 0.38;
-
-        for (let i = 0; i < sizeX; i++) {
-            for (let j = 0; j < sizeZ; j++) {
-                const x = cx + (i - (sizeX - 1) / 2) * spacing;
-                const z = cz + (j - (sizeZ - 1) / 2) * spacing;
-                // 底座小圆台
-                const base = new THREE.Mesh(
-                    new THREE.CylinderGeometry(baseR * 1.05, baseR * 1.05, 0.06, 12), baseMat
-                );
-                base.position.set(x, 0.03, z);
-                this.scene.add(base);
-                // 红刺锥
-                const cone = new THREE.Mesh(
-                    new THREE.ConeGeometry(baseR, h, 6), spikeMat
-                );
-                cone.position.set(x, h / 2 + 0.06, z);
-                cone.castShadow = true;
-                addOutline(cone, 0.08);
-                this.scene.add(cone);
-            }
-        }
-        // hitbox 比可视稍小，留容错
-        const halfX = (sizeX - 1) * spacing / 2 + baseR * 0.7;
-        const halfZ = (sizeZ - 1) * spacing / 2 + baseR * 0.7;
-        this.spikes.push({
-            min: new THREE.Vector3(cx - halfX, 0, cz - halfZ),
-            max: new THREE.Vector3(cx + halfX, h * 0.8, cz + halfZ),
-        });
-    }
-
-    _createGoal(x, z, colorHex, name) {
-        const group = new THREE.Group();
-        // 终点星：强发光，让 bloom 捕捉到
-        const mat = new THREE.MeshStandardMaterial({
-            color: colorHex,
-            emissive: colorHex,
-            emissiveIntensity: 1.8,
-            roughness: 0.4,
-            metalness: 0.2,
-        });
-        const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.95), mat);
-        star.position.y = 1.4;
-        star.castShadow = true;
-        addOutline(star, 0.05);
-        group.add(star);
-
-        const ring = new THREE.Mesh(
-            new THREE.RingGeometry(1.4, 2.0, 32),
-            new THREE.MeshBasicMaterial({
-                color: colorHex, transparent: true, opacity: 0.55, side: THREE.DoubleSide
-            })
-        );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.03;
-        group.add(ring);
-
-        // 地上一个发光光晕（同色，半透明）
-        const glow = new THREE.PointLight(colorHex, 1.2, 8, 1.5);
-        glow.position.y = 1.4;
-        group.add(glow);
-
-        group.position.set(x, 0, z);
-        this.scene.add(group);
-        this.goals.push({ x, z, name, star, group });
     }
 
     _buildPlayer() {
@@ -6089,18 +6200,8 @@ export class Game3D {
                 e.preventDefault();
                 this.onOpenCustomize();
             }
-            if ((this.won || this.dying) && e.code === 'Space') {
+            if (this.dying && e.code === 'Space') {
                 e.preventDefault();
-                this._restart();
-            }
-            // 到达终点后按 ESC 继续逛
-            if (this.won && e.code === 'Escape') {
-                e.preventDefault();
-                this._dismissWin();
-            }
-            if (this.won && e.code === 'KeyR') {
-                e.preventDefault();
-                try { localStorage.removeItem('eggGameWonGoals'); } catch (err) {}
                 this._restart();
             }
             // 数字键切时段
@@ -6149,10 +6250,8 @@ export class Game3D {
             this._updatePlayer(dt);
             this._resolveObstacleCollisions();
             this._checkSpikes();
-            this._checkGoals();
         }
         this._updatePlayerAnimation(dt);
-        this._updateGoals();
         this._updateButterflies();
         this._updateSkyClouds(dt);
         this._updateBirdFlock(dt);
@@ -6169,6 +6268,8 @@ export class Game3D {
         this._checkCandles(dt);
         this._updateSmoke(dt);
         this._updateFireflies(dt);
+        this._updateDayMotes(dt);
+        this._updateLakeGlint(dt);
         this._updateBunnies(dt);
         this._updateRipples(dt);
         this._updateLampposts();
@@ -6216,6 +6317,12 @@ export class Game3D {
             if (this._knockbackCooldown <= 0) this._knockbackCooldown = 0;
         }
         if (!this.dying && !this.won) this._checkWindmillKnockback();
+        // toon ramp 兜底：每 2 秒扫一遍，补上"先入场景后挂材质"的漏网之鱼
+        this._rampPatchT = (this._rampPatchT || 0) + dt;
+        if (this._rampPatchT > 2) {
+            this._rampPatchT = 0;
+            this._patchToon(this.scene);
+        }
         // 草地风偏移 shader uniform
         if (this.grass && this.grass.material.userData.shader) {
             this.grass.material.userData.shader.uniforms.uTime.value =
@@ -6231,8 +6338,8 @@ export class Game3D {
     _updatePlayer(dt) {
         // 计算目标方向（原始 WASD 输入）
         let ix = 0, iz = 0;
-        if (this.keys['KeyW'] || this.keys['ArrowUp']) iz -= 1;
-        if (this.keys['KeyS'] || this.keys['ArrowDown']) iz += 1;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) iz += 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) iz -= 1;
         if (this.keys['KeyA'] || this.keys['ArrowLeft']) ix -= 1;
         if (this.keys['KeyD'] || this.keys['ArrowRight']) ix += 1;
         const mag = Math.hypot(ix, iz);
@@ -6309,17 +6416,6 @@ export class Game3D {
         }
     }
 
-    _checkGoals() {
-        for (const goal of this.goals) {
-            const dx = this.player.position.x - goal.x;
-            const dz = this.player.position.z - goal.z;
-            if (dx * dx + dz * dz < 2.5 * 2.5) {
-                this._triggerWin(goal);
-                return;
-            }
-        }
-    }
-
     _updatePlayerAnimation(dt) {
         // 12 原则的"挤压拉伸"：所有非物理形变都在 animRoot 上做
         const t = performance.now() * 0.001;
@@ -6363,14 +6459,6 @@ export class Game3D {
         this.animRoot.scale.set(this._animScaleXZ, this._animScaleY, this._animScaleXZ);
     }
 
-    _updateGoals() {
-        const t = performance.now() * 0.001;
-        this.goals.forEach((g, i) => {
-            g.star.rotation.y = t * 1.5;
-            g.star.position.y = 1.4 + Math.sin(t * 2 + i) * 0.18;
-        });
-    }
-
     _updateDayNight(dt) {
         this.dayPhase = (this.dayPhase + dt / this.dayDuration) % 1;
         // 太阳轨迹：phase 0 = 半夜，0.25 = 日出，0.5 = 正午，0.75 = 日落
@@ -6402,8 +6490,9 @@ export class Game3D {
         this.ambient.intensity = 0.08 + 0.42 * dayness;
         this.hemi.intensity   = 0.10 + 0.30 * dayness;
 
-        // 曝光：白天 1.1，夜里 0.45
-        this.renderer.toneMappingExposure = 0.45 + 0.7 * dayness;
+        // 曝光：白天 1.1，夜里 0.45；黄金时刻额外提亮（否则日出日落死暗）
+        const goldenLift = Math.pow(Math.max(0, 1 - Math.abs(sunHeight) / 0.34), 1.4);
+        this.renderer.toneMappingExposure = 0.45 + 0.7 * dayness + 0.35 * goldenLift;
 
         // 星星：日落后淡入，午夜全亮，缓慢自转
         if (this.stars) {
@@ -6434,14 +6523,39 @@ export class Game3D {
             this.moonGlow.visible = moonUp;
         }
 
-        // 雾色随时间变（黄昏暖、夜里深蓝、白天淡蓝）
-        if (sunHeight >= 0.25) {
-            this.scene.fog.color.setHex(0xd8ecf5);
-        } else if (sunHeight >= -0.05) {
-            // 日出/日落
-            this.scene.fog.color.setHex(0xeec0a0);
-        } else {
-            this.scene.fog.color.setHex(0x2a3556);
+        // ===== 天空穹顶 + 雾色（连续插值，无档位跳变）=====
+        // skyDay：比光照 dayness 更平滑的过渡（日出前就开始泛蓝）
+        const skyDay = THREE.MathUtils.smoothstep(sunHeight, -0.14, 0.38);
+        // setness：太阳贴近地平线时达到峰值（日出日落的暖晕浓度）
+        const setness = Math.pow(Math.max(0, 1 - Math.abs(sunHeight) / 0.34), 1.4);
+        this._lastDayness = dayness;
+        if (this.skyDome) {
+            const u = this._skyUniforms;
+            u.uDayness.value = skyDay;
+            u.uSetness.value = setness;
+            u.uSunDir.value.copy(this.sun.position).normalize();
+            this.skyDome.position.copy(this.camera.position);
+        }
+        // 雾色 = 天空地平线色（同一套混色公式，远景与天空无缝衔接）
+        if (!this._tmpColor2) this._tmpColor2 = new THREE.Color();
+        const fogC = this._tmpColor2;
+        fogC.copy(this._skyUniforms.uHorNight.value)
+            .lerp(this._skyUniforms.uHorDay.value, skyDay)
+            .lerp(this._skyUniforms.uHorSet.value, setness * 0.85);
+        this.scene.fog.color.copy(fogC);
+        // 云染色：白天白、黄昏橘粉、夜里暗蓝
+        if (this.skyClouds) {
+            if (!this._tmpColor3) this._tmpColor3 = new THREE.Color();
+            const cloudC = this._tmpColor3;
+            cloudC.setRGB(0.36, 0.40, 0.55)                            // 夜
+                .lerp(this._tmpColor.setRGB(0.93, 0.95, 0.98), skyDay) // 昼（压低于 bloom 阈值）
+                .lerp(this._tmpColor.setRGB(1, 0.74, 0.58), setness * 0.6); // 霞（轻染，别成血块）
+            this.skyClouds.forEach(cl => cl.material.color.copy(cloudC));
+        }
+        // 补光跟着太阳走对侧；夜里就是月光
+        if (this.fillLight) {
+            this.fillLight.position.set(-this.sun.position.x, 26, -this.sun.position.z);
+            this.fillLight.intensity = 0.12 + 0.16 * dayness;
         }
 
         // 时段提示
@@ -6502,36 +6616,6 @@ export class Game3D {
             outLZ * (1 - t) + fpsLZ * t
         );
         this.camera.lookAt(this._tmpLook);
-    }
-
-    _triggerWin(goal) {
-        if (goal.triggeredThisRun) return;  // 同一 session 内不再重复触发
-        goal.triggeredThisRun = true;
-        this.won = true;
-        this._saveWonGoal(goal.name);
-        this._playWin();
-        if (this._loadWonGoals().length >= this.goals.length) {
-            this._unlockAchievement('all_goals');
-        }
-        // 星暗化，提示"已通过"
-        goal.star.material.emissiveIntensity = 0.4;
-        goal.star.material.color.setHex(0xeed694);
-        const allWon = this._loadWonGoals();
-        const totalGoals = this.goals.length;
-        const allCleared = allWon.length >= totalGoals;
-        if (this.statusEl) {
-            const extra = allCleared
-                ? '<br><small style="font-size:16px;color:#888">三方全通！按 R 重置探险记录</small>'
-                : `<br><small style="font-size:16px;color:#888">已通 ${allWon.length}/${totalGoals}</small>`;
-            this.statusEl.innerHTML = `🎉 你到达「${goal.name}」啦！${extra}<br><small style="font-size:18px">ESC 继续逛 · 空格 重玩 · C 换造型</small>`;
-            this.statusEl.style.display = 'block';
-        }
-    }
-
-    _dismissWin() {
-        this.won = false;
-        if (this.statusEl) this.statusEl.style.display = 'none';
-        // 星已经标了 triggeredThisRun，不会再弹
     }
 
     _triggerDeath() {
