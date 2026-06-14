@@ -566,8 +566,8 @@ export class Game3D {
         this.scene.add(this.fillLight);
 
         // 昼夜循环状态
-        this.dayPhase = 0.35;     // 开局时间：上午（0=半夜，0.25=日出，0.5=正午，0.75=日落）
-        this.dayDuration = 90;    // 90 秒一个完整白天-黑夜循环
+        this.dayPhase = 0.32;     // 开局时间：上午（0=半夜，0.25=日出，0.5=正午，0.75=日落）
+        this.dayDuration = 180;   // 白天基准时长；夜里走得快，整轮约 2 分钟、白天占大头（够探索）
         this._tmpColor = new THREE.Color();
         this._timeChip = document.getElementById('game-time');
 
@@ -829,6 +829,8 @@ export class Game3D {
         this._buildMonsters();
         // ===== 区域感受系统（冷/热/清凉 + 进区故事旁白）=====
         this._initRegionFeel();
+        // ===== 收集主线：火种/泉珠/月光石 → 点亮钟楼 =====
+        this._initQuest();
     }
 
     _buildHouses() {
@@ -1683,6 +1685,186 @@ export class Game3D {
                 }
             }
         }
+    }
+
+    // ===================== 收集主线：点亮钟楼 =====================
+    _initQuest() {
+        this.questItems = [];
+        this.questCount = 0;
+        this._questReady = false;
+        this._questDone = false;
+        this.bellTowerPos = new THREE.Vector3(7, 0, 5);
+
+        // 三件心愿之物（含一束光柱指引，方便在大地图里找到）
+        // 1) 火种——冰雪国冰湖边
+        this._addQuestItem({
+            key: 'fireseed', x: -30, z: -88, color: 0xff7a2a, emissive: 0xff5500,
+            emoji: '🔥', label: '暖灯火种',
+            story: '🔥 拿到暖灯火种！<br>小雪精灵不再孤单啦。',
+        });
+        // 2) 清泉之珠——沙漠绿洲（复用已埋好的发光珠子）
+        if (this._oasisGem) {
+            this.questItems.push({
+                key: 'springpearl', mesh: this._oasisGem, beam: this._addQuestBeam(this._oasisGem.position, 0x66e0ff),
+                baseY: this._oasisGem.position.y, phase: 0, collected: false,
+                emoji: '💧', label: '清泉之珠',
+                story: '💧 挖出清泉之珠！<br>绿洲会重新冒水的。',
+            });
+        }
+        // 3) 月光石——月光湖边
+        this._addQuestItem({
+            key: 'moonstone', x: 38, z: -32, color: 0xdfeaff, emissive: 0x9ec4ff,
+            emoji: '🌙', label: '月光石',
+            story: '🌙 找到月光石！<br>湖底老乌龟笑了。',
+        });
+
+        // HUD：心愿之物进度
+        this._questChip = document.createElement('div');
+        Object.assign(this._questChip.style, {
+            position: 'fixed', top: '64px', left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '6px 16px',
+            background: 'rgba(0,0,0,0.4)', color: '#fff',
+            fontSize: '17px', fontWeight: 'bold', letterSpacing: '1px',
+            borderRadius: '14px', zIndex: '19', pointerEvents: 'none',
+            boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
+        });
+        document.body.appendChild(this._questChip);
+        this._updateQuestHud();
+    }
+
+    _addQuestItem({ key, x, z, color, emissive, emoji, label, story }) {
+        const mesh = new THREE.Mesh(
+            new THREE.IcosahedronGeometry(0.55, 0),
+            new THREE.MeshStandardMaterial({
+                color, emissive, emissiveIntensity: 1.3, metalness: 0.2, roughness: 0.3,
+            })
+        );
+        mesh.position.set(x, 1.4, z);
+        mesh.castShadow = true;
+        this.scene.add(mesh);
+        this.questItems.push({
+            key, mesh, beam: this._addQuestBeam(mesh.position, emissive),
+            baseY: 1.4, phase: Math.random() * Math.PI * 2, collected: false,
+            emoji, label, story,
+        });
+    }
+
+    // 一束竖直光柱，远远就能看到心愿之物在哪
+    _addQuestBeam(pos, color) {
+        const beam = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.36, 0.36, 9, 12, 1, true),
+            new THREE.MeshBasicMaterial({
+                color, transparent: true, opacity: 0.34,
+                blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+            })
+        );
+        beam.position.set(pos.x, 4.5, pos.z);
+        this.scene.add(beam);
+        return beam;
+    }
+
+    _updateQuest(dt) {
+        if (!this.questItems) return;
+        const t = performance.now() * 0.001;
+        const p = this.player.position;
+
+        for (const it of this.questItems) {
+            if (it.collected) continue;
+            // 漂浮 + 自转 + 光柱呼吸
+            it.mesh.rotation.y = t * 1.5 + it.phase;
+            it.mesh.position.y = it.baseY + Math.sin(t * 1.8 + it.phase) * 0.2;
+            if (it.beam) it.beam.material.opacity = 0.3 + Math.sin(t * 2 + it.phase) * 0.1;
+
+            const dx = p.x - it.mesh.position.x;
+            const dz = p.z - it.mesh.position.z;
+            const dist = Math.hypot(dx, dz);
+            if (dist < 2.2) {
+                it.mesh.position.x += dx * 6 * dt;   // 吸附
+                it.mesh.position.z += dz * 6 * dt;
+                if (dist < 0.9) this._collectQuestItem(it);
+            }
+        }
+
+        // 集齐三样 → 引导回钟楼（钟楼亮一束金光）
+        if (this._questReady && !this._questDone) {
+            if (!this._bellBeam) {
+                this._bellBeam = this._addQuestBeam(this.bellTowerPos, 0xffd86b);
+                this._bellBeam.scale.y = 1.6;
+                this._bellBeam.position.y = 7;
+            }
+            this._bellBeam.material.opacity = 0.32 + Math.sin(t * 3) * 0.12;
+            // 走到钟楼脚下 → 点亮通关
+            if (Math.hypot(p.x - this.bellTowerPos.x, p.z - this.bellTowerPos.z) < 3.4) {
+                this._lightBellTower();
+            }
+        }
+    }
+
+    _collectQuestItem(it) {
+        it.collected = true;
+        this.scene.remove(it.mesh);
+        if (it.mesh.geometry) it.mesh.geometry.dispose();
+        if (it.mesh.material) it.mesh.material.dispose();
+        if (it.beam) {
+            this.scene.remove(it.beam);
+            it.beam.geometry.dispose(); it.beam.material.dispose();
+        }
+        if (it.key === 'springpearl') this._oasisGem = null;  // 别再让沙漠 FX 引用它
+        this.questCount++;
+        this._updateQuestHud();
+        // 收集反馈
+        this._tone(880, 0.10, 'sine', 0.07);
+        this._tone(1320, 0.12, 'sine', 0.06, 0.06);
+        this._launchFirework();
+        this._showEasterBadge(it.story.replace(/<br>/g, ' '));
+        this._unlockAchievement && this._unlockAchievement('quest_' + it.key);
+
+        if (this.questCount >= this.questItems.length) {
+            this._questReady = true;
+            setTimeout(() => {
+                if (!this._questDone) this._showEasterBadge('✨ 三样心愿之物都齐了！快回村庄钟楼！');
+            }, 2400);
+        }
+    }
+
+    _updateQuestHud() {
+        if (!this._questChip) return;
+        const mark = (k) => {
+            const it = this.questItems.find(i => i.key === k);
+            return it ? `${it.emoji}${it.collected ? '✅' : '·'}` : '';
+        };
+        this._questChip.innerHTML =
+            `心愿之物　${mark('fireseed')}　${mark('springpearl')}　${mark('moonstone')}　${this.questCount}/${this.questItems.length}`;
+    }
+
+    _lightBellTower() {
+        this._questDone = true;
+        // 钟楼整体发光
+        if (this.bell) {
+            this.bell.material.emissive = new THREE.Color(0xffcf5a);
+            this.bell.material.emissiveIntensity = 1.4;
+        }
+        this.bellGroup?.traverse(o => {
+            if (o.isMesh && o.material && 'emissive' in o.material) {
+                o.material.emissive = new THREE.Color(0xffe6a0);
+                o.material.emissiveIntensity = 0.5;
+            }
+        });
+        // 撤掉引导光柱
+        if (this._bellBeam) {
+            this.scene.remove(this._bellBeam);
+            this._bellBeam.geometry.dispose(); this._bellBeam.material.dispose();
+            this._bellBeam = null;
+        }
+        // 钟声 + 胜利和弦 + 连发烟花
+        this._bellShakeT = 1.4;
+        this._playBell && this._playBell();
+        this._playWin();
+        for (let i = 0; i < 6; i++) setTimeout(() => this._launchFirework(), i * 260);
+        this._updateQuestHud();
+        this._showEasterBadge('🔔 钟楼亮啦！谢谢你，蛋蛋！🎆');
+        this._unlockAchievement && this._unlockAchievement('belltower_lit');
     }
 
     _scatterMushrooms() {
@@ -3748,7 +3930,7 @@ export class Game3D {
 
     _initShootingStars() {
         this.shootingStars = [];
-        this._meteorTimer = 12 + Math.random() * 10;
+        this._meteorTimer = 4 + Math.random() * 6;   // 入夜后较快来第一颗
     }
 
     _updateShootingStars(dt) {
@@ -3767,27 +3949,24 @@ export class Game3D {
             if (m.life <= 0) {
                 this.scene.remove(m.head);
                 m.head.geometry.dispose(); m.head.material.dispose();
-                if (m.trail) {
-                    this.scene.remove(m.trail);
-                    m.trail.geometry.dispose(); m.trail.material.dispose();
-                }
+                if (m.glow) { this.scene.remove(m.glow); m.glow.geometry.dispose(); m.glow.material.dispose(); }
+                if (m.trail) { this.scene.remove(m.trail); m.trail.geometry.dispose(); m.trail.material.dispose(); }
                 return false;
             }
             m.head.position.x += m.vx * dt;
             m.head.position.y += m.vy * dt;
             m.head.position.z += m.vz * dt;
-            // 拉尾巴朝运动方向
+            if (m.glow) m.glow.position.copy(m.head.position);
+            // 拖尾：圆柱轴已在生成时用四元数对齐速度方向，这里只跟位置（尾巴拖在头后面）
             if (m.trail) {
-                m.trail.position.copy(m.head.position);
-                m.trail.lookAt(
-                    m.head.position.x - m.vx,
-                    m.head.position.y - m.vy,
-                    m.head.position.z - m.vz
-                );
+                m.trail.position.copy(m.head.position).addScaledVector(m.dir, -m.trailLen * 0.5);
             }
-            const k = 1 - m.life / m.full;
-            m.head.material.opacity = 1 - k;
-            if (m.trail) m.trail.material.opacity = (1 - k) * 0.6;
+            // 头两端淡入淡出：刚出现快速亮起，末尾淡出
+            const age = 1 - m.life / m.full;            // 0→1
+            const fade = Math.min(1, m.life / 0.4) * Math.min(1, age / 0.06 + 0.2);
+            m.head.material.opacity = fade;
+            if (m.glow) m.glow.material.opacity = fade * 0.5;
+            if (m.trail) m.trail.material.opacity = fade * 0.8;
             return true;
         });
     }
@@ -3796,36 +3975,62 @@ export class Game3D {
 
     _spawnMeteor() {
         this._onMeteorSeen();
-        const startAng = Math.random() * Math.PI * 2;
-        const r = 80;
-        const startX = Math.cos(startAng) * r;
-        const startZ = Math.sin(startAng) * r;
-        const dirAng = startAng + Math.PI + (Math.random() - 0.5) * 0.4;
-        const speed = 30 + Math.random() * 10;
+        // 生成在玩家"正前方"的天空、从一侧横扫到另一侧——保证落在镜头视野里，抬头就看见
+        const px = this.player ? this.player.position.x : 0;
+        const pz = this.player ? this.player.position.z : 0;
+        const yaw = this.cameraYaw || 0;
+        const fx = Math.sin(yaw), fz = -Math.cos(yaw);   // 相机前方（水平）
+        const rx = Math.cos(yaw), rz = Math.sin(yaw);    // 相机右方
+        const side = Math.random() < 0.5 ? 1 : -1;       // 从左还是从右进场
+        const ahead = 26 + Math.random() * 8;
+        const lateral = 26;
+        const startX = px + fx * ahead + rx * (side * lateral);
+        const startZ = pz + fz * ahead + rz * (side * lateral);
+        // 速度：主要横扫向对侧 + 轻微下落 + 略微朝镜头
+        const cross = 23 + Math.random() * 6;
+        const vx = -rx * side * cross - fx * 2;
+        const vz = -rz * side * cross - fz * 2;
+        const vy = -5 - Math.random() * 2;
+        const dir = new THREE.Vector3(vx, vy, vz).normalize();
+
+        // 头：大而亮，fog:false（夜雾不染），bloom 抓得到
         const head = new THREE.Mesh(
-            new THREE.SphereGeometry(0.4, 12, 10),
+            new THREE.SphereGeometry(0.7, 14, 12),
             new THREE.MeshStandardMaterial({
-                color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3,
-                transparent: true, opacity: 1,
+                color: 0xffffff, emissive: 0xfff0b0, emissiveIntensity: 4,
+                transparent: true, opacity: 1, fog: false,
             })
         );
-        head.position.set(startX, 32 + Math.random() * 8, startZ);
+        head.position.set(startX, 30 + Math.random() * 8, startZ);
         this.scene.add(head);
-        // 尾迹（细长圆柱）
-        const trail = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.05, 0.3, 6.0, 8),
+        // 柔光晕
+        const glow = new THREE.Mesh(
+            new THREE.SphereGeometry(1.5, 14, 12),
             new THREE.MeshBasicMaterial({
-                color: 0xfff099, transparent: true, opacity: 0.6,
+                color: 0xffe98a, transparent: true, opacity: 0.5,
+                depthWrite: false, fog: false, blending: THREE.AdditiveBlending,
             })
         );
-        trail.position.copy(head.position);
+        glow.position.copy(head.position);
+        this.scene.add(glow);
+        // 拖尾：锥形圆柱（粗端贴头、细端在尾），用四元数把 +Y 轴对齐速度方向
+        const trailLen = 9;
+        const trail = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.5, 0.02, trailLen, 10, 1, true),  // 顶(+Y,粗)=头, 底(细)=尾
+            new THREE.MeshBasicMaterial({
+                color: 0xfff3b0, transparent: true, opacity: 0.8,
+                depthWrite: false, fog: false, blending: THREE.AdditiveBlending,
+                side: THREE.DoubleSide,
+            })
+        );
+        trail.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        trail.position.copy(head.position).addScaledVector(dir, -trailLen * 0.5);
         this.scene.add(trail);
+
         this.shootingStars.push({
-            head, trail,
-            vx: Math.cos(dirAng) * speed,
-            vy: -8 - Math.random() * 4,
-            vz: Math.sin(dirAng) * speed,
-            life: 2.0, full: 2.0,
+            head, glow, trail, dir, trailLen,
+            vx, vy, vz,
+            life: 2.6, full: 2.6,
         });
         // 流星音（短哨）
         this._tone(2000, 0.4, 'sine', 0.03);
@@ -4627,6 +4832,13 @@ export class Game3D {
         if (this._playerHPBar) this._playerHPBar.visible = !this.isInsideHouse;
         const t = performance.now() * 0.001;
         const p = this.player.position;
+        // 刚躲进房子且附近有正在追的怪 → 提示"安全了"
+        if (this.isInsideHouse && !this._wasInsideHouse) {
+            const chased = this.monsters.some(m => m.state === 'alive' &&
+                Math.hypot(m.group.position.x - p.x, m.group.position.z - p.z) < 12);
+            if (chased) this._showEasterBadge('🏠 安全了！怪物进不来');
+        }
+        this._wasInsideHouse = this.isInsideHouse;
         for (const m of this.monsters) {
             if (m.state === 'ko') {
                 if (m.temporary) continue;  // 咬人箱怪不复活，等被清出列表
@@ -4650,28 +4862,30 @@ export class Game3D {
                 const flap = Math.sin(t * 18 + m.phase) * 0.5;
                 m.wings.forEach((w, wi) => { w.rotation.y = (wi === 0 ? 1 : -1) * (0.6 + flap); });
             }
-            // AI：玩家进 aggro 范围 → 追
+            // AI：玩家进 aggro 范围 → 追；但玩家躲进房子里 → 放弃追、回老家（房子=避难所）
             const dx = p.x - m.group.position.x;
             const dz = p.z - m.group.position.z;
             const dist = Math.hypot(dx, dz);
             const SPEED = m.speed;
-            if (dist < m.aggro && dist > 0.6) {
+            const chasing = !this.isInsideHouse && dist < m.aggro && dist > 0.6;
+            if (chasing) {
                 m.group.position.x += (dx / dist) * SPEED * dt;
                 m.group.position.z += (dz / dist) * SPEED * dt;
                 m.group.rotation.y = Math.atan2(dx, dz);
-            } else if (dist >= m.aggro && !m.temporary) {
-                // 回家
+            } else {
+                // 不追（出 aggro 或玩家在屋内）→ 慢慢晃回老家
                 const hx = m.home.x - m.group.position.x;
                 const hz = m.home.z - m.group.position.z;
                 const hd = Math.hypot(hx, hz);
                 if (hd > 0.3) {
                     m.group.position.x += (hx / hd) * SPEED * 0.5 * dt;
                     m.group.position.z += (hz / hd) * SPEED * 0.5 * dt;
+                    m.group.rotation.y = Math.atan2(hx, hz);
                 }
             }
-            // 攻击玩家：1.0m 内 1s 一次，按种类扣血
+            // 攻击玩家：1.0m 内 1s 一次，按种类扣血（屋内不挨打）
             m.attackCD -= dt;
-            if (dist < 1.0 + m.r && m.attackCD <= 0 && this._invincible <= 0) {
+            if (!this.isInsideHouse && dist < 1.0 + m.r && m.attackCD <= 0 && this._invincible <= 0) {
                 m.attackCD = 1.0;
                 this._hurtPlayer(m.dmg, dx, dz);
             }
@@ -7227,6 +7441,7 @@ export class Game3D {
         this._updateRipples(dt);
         this._updateLampposts();
         this._updateCollectStars(dt);
+        this._updateQuest(dt);
         this._updateHotAirBalloon(dt);
         this._updateSnowmen();
         this._updateHolidayLights();
@@ -7414,7 +7629,9 @@ export class Game3D {
     }
 
     _updateDayNight(dt) {
-        this.dayPhase = (this.dayPhase + dt / this.dayDuration) % 1;
+        // 白天(0.25~0.75)正常走，夜里加速 2.6 倍 → 白天长、夜晚短（仍保留星空/流星时段）
+        const nightSpeedup = (this.dayPhase < 0.25 || this.dayPhase > 0.75) ? 2.6 : 1;
+        this.dayPhase = (this.dayPhase + (dt / this.dayDuration) * nightSpeedup) % 1;
         // 太阳轨迹：phase 0 = 半夜，0.25 = 日出，0.5 = 正午，0.75 = 日落
         const ang = this.dayPhase * Math.PI * 2 - Math.PI / 2; // 半夜时 sin=-1
         const sunHeight = Math.sin(ang);        // -1..1
