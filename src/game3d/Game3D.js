@@ -567,7 +567,7 @@ export class Game3D {
 
         // 昼夜循环状态
         this.dayPhase = 0.32;     // 开局时间：上午（0=半夜，0.25=日出，0.5=正午，0.75=日落）
-        this.dayDuration = 180;   // 白天基准时长；夜里走得快，整轮约 2 分钟、白天占大头（够探索）
+        this.dayDuration = 600;   // 白天≈5分钟(相位0.25~0.75占一半→dayDuration/2)，夜里加速保持约1分钟
         this._tmpColor = new THREE.Color();
         this._timeChip = document.getElementById('game-time');
 
@@ -970,10 +970,11 @@ export class Game3D {
             group.add(v1);
         }
 
-        // 室内暖灯（夜里营造"家的灯火"）
-        const lamp = new THREE.PointLight(0xffd599, 1.1, 9, 1.5);
+        // 室内暖灯（默认灭；夜里进到这间屋才自动点亮，见 _updateHouseTransparency）
+        const lamp = new THREE.PointLight(0xffd599, 0, 9, 1.5);
         lamp.position.set(0, H - 1.0, 0);
         group.add(lamp);
+        this._lastHouseLamp = lamp;  // 临时存一下，给下面 houses.push 收进 house 对象
 
         // ===== 室内家具 =====
         const woodTop = 0xc89868, woodLeg = 0xa67a4a;
@@ -1099,6 +1100,7 @@ export class Game3D {
             max: new THREE.Vector3(x + W/2, H, z + D/2),
             fadeables,
             currentOpacity: 1,
+            lamp: this._lastHouseLamp,   // 夜里进屋自动开的灯
         });
     }
 
@@ -1107,6 +1109,8 @@ export class Game3D {
         const p = this.player.position;
         let anyInside = false;
         let activeDoor = null;
+        // 天黑了没？（白天进屋不用开灯，屋里本来就亮）
+        const night = (this._lastDayness ?? 1) < 0.32;
         for (const h of this.houses) {
             const inside =
                 p.x > h.min.x && p.x < h.max.x &&
@@ -1121,6 +1125,11 @@ export class Game3D {
                 this._playChime();
                 h.wasInside = inside;
                 if (inside) this._unlockAchievement('into_house');
+            }
+            // 夜里进到这间屋 → 灯渐亮；出门/天亮 → 渐灭（像进门开灯）
+            if (h.lamp) {
+                const lampTarget = (inside && night) ? 2.2 : 0;
+                h.lamp.intensity += (lampTarget - h.lamp.intensity) * Math.min(1, 5 * dt);
             }
             const target = inside ? 0.18 : 1.0;
             h.currentOpacity += (target - h.currentOpacity) * Math.min(1, 8 * dt);
@@ -6030,7 +6039,8 @@ export class Game3D {
         );
         chandRope.position.set(0, H - 0.5, 0);
         group.add(chandRope);
-        const ceilingLight = new THREE.PointLight(0xffd599, 1.6, 12, 1.4);
+        // 默认灭；夜里进村屋才自动点亮
+        const ceilingLight = new THREE.PointLight(0xffd599, 0, 12, 1.4);
         ceilingLight.position.set(0, H - 1.0, 0);
         group.add(ceilingLight);
 
@@ -6064,6 +6074,7 @@ export class Game3D {
             max: new THREE.Vector3(x + W/2, H, z + D/2),
             fadeables,
             currentOpacity: 1,
+            lamp: ceilingLight,   // 夜里进村屋自动开的灯
         });
     }
 
@@ -7629,8 +7640,8 @@ export class Game3D {
     }
 
     _updateDayNight(dt) {
-        // 白天(0.25~0.75)正常走，夜里加速 2.6 倍 → 白天长、夜晚短（仍保留星空/流星时段）
-        const nightSpeedup = (this.dayPhase < 0.25 || this.dayPhase > 0.75) ? 2.6 : 1;
+        // 白天(0.25~0.75)正常走→约5分钟；夜里加速5倍→约1分钟（仍保留星空/流星时段）
+        const nightSpeedup = (this.dayPhase < 0.25 || this.dayPhase > 0.75) ? 5 : 1;
         this.dayPhase = (this.dayPhase + (dt / this.dayDuration) * nightSpeedup) % 1;
         // 太阳轨迹：phase 0 = 半夜，0.25 = 日出，0.5 = 正午，0.75 = 日落
         const ang = this.dayPhase * Math.PI * 2 - Math.PI / 2; // 半夜时 sin=-1
