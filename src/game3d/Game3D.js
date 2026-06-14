@@ -205,6 +205,33 @@ function makeIceTexture() {
     return tex;
 }
 
+// 雪花贴图：柔和圆芯 + 六角淡芒（贴在 Points 上，消除方块感）
+function makeSnowflakeTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, 64, 64);
+    // 柔和圆芯
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    g.addColorStop(0,   'rgba(255,255,255,1)');
+    g.addColorStop(0.4, 'rgba(255,255,255,0.85)');
+    g.addColorStop(1,   'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(32, 32, 30, 0, Math.PI * 2); ctx.fill();
+    // 六角淡芒
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(32, 32);
+        ctx.lineTo(32 + Math.cos(a) * 26, 32 + Math.sin(a) * 26);
+        ctx.stroke();
+    }
+    return new THREE.CanvasTexture(canvas);
+}
+
 // 湖面碎波光：细小白色短横线，平铺后缓慢流动 + additive 叠加
 function makeLakeGlintTexture() {
     const canvas = document.createElement('canvas');
@@ -375,6 +402,7 @@ export class Game3D {
         this.spikes = [];
         this.goals = [];
 
+        const _ctor0 = performance.now();
         this._initThree();
         this._buildWorld();
         this._buildPlayer();
@@ -384,8 +412,9 @@ export class Game3D {
         this._onResize = this._onResize.bind(this);
         window.addEventListener('resize', this._onResize);
 
-        // 关键：预编译所有 shader + 上传所有 texture，消除首次走动时的编译卡顿
+        // 预编译所有 shader（消除游戏中途首次触发某材质的编译掉帧）+ 上传所有 texture
         this._warmup();
+        if (typeof window !== 'undefined') window.__ctorMs = performance.now() - _ctor0;
 
         this.clock = new THREE.Clock();
         this._tick = this._tick.bind(this);
@@ -428,23 +457,16 @@ export class Game3D {
             new THREE.MeshStandardMaterial({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
         ));
 
-        // 2) 多帧渲染（8 个不同相机角度+俯仰，让 frustum 覆盖整个场景）
+        // 2) 预编译所有 shader：renderer.compile() 遍历整个场景编译每个材质（与相机角度无关，
+        //    一次即覆盖全部），消除游戏中途首次触发某粒子/材质时的编译掉帧。
+        //    不在这里做合成渲染——那一帧（bloom 多趟 + Reflector 湖面二次渲染 + 阴影贴图）在
+        //    弱 GPU/高 DPI 上要几百 ms 甚至数秒，且会冻结在捏脸界面。把它交给游戏循环第一帧：
+        //    玩家直接看到世界出现，而不是黑屏等待。（旧实现跑 8 次更是 8 倍冻结。）
         const origPos = this.camera.position.clone();
         const origRot = this.camera.rotation.clone();
-        const warmupViews = [
-            [20, 12, 13], [-20, 12, 13], [0, 30, 0],     // 旁、上俯瞰
-            [40, 10, 0], [-40, 10, 0], [0, 8, -40],      // 三方
-            [0, 4, 5], [0, 25, -80],                      // 室内角度、远北
-        ];
-        for (const v of warmupViews) {
-            this.camera.position.set(v[0], v[1], v[2]);
-            this.camera.lookAt(0, 0, 0);
-            this.renderer.compile(this.scene, this.camera);
-            try {
-                if (this.composer) this.composer.render();
-                else this.renderer.render(this.scene, this.camera);
-            } catch (e) {}
-        }
+        this.camera.position.set(0, 12, 18);
+        this.camera.lookAt(0, 0, 0);
+        this.renderer.compile(this.scene, this.camera);
         this.camera.position.copy(origPos);
         this.camera.rotation.copy(origRot);
 
@@ -2814,8 +2836,8 @@ export class Game3D {
         const flakeGeo = new THREE.BufferGeometry();
         flakeGeo.setAttribute('position', new THREE.BufferAttribute(fp, 3));
         this.snowFlakes = new THREE.Points(flakeGeo, new THREE.PointsMaterial({
-            color: 0xffffff, size: 0.14, transparent: true, opacity: 0.85,
-            depthWrite: false, sizeAttenuation: true,
+            map: makeSnowflakeTexture(), color: 0xffffff, size: 0.28,
+            transparent: true, opacity: 0.9, depthWrite: false, sizeAttenuation: true,
         }));
         this.snowFlakes.frustumCulled = false;
         this.scene.add(this.snowFlakes);
@@ -5779,24 +5801,27 @@ export class Game3D {
     _initWeather() {
         this.weatherTimer = 20;
         this.weather = 'sunny';
-        // 雨：浅蓝细长 Points，快下落
+        // 雨：真正的雨丝 —— 用 LineSegments，每滴一根短竖线（Points 永远是方块，做不出雨丝）
         const rainCount = 700;
-        const rainPos = new Float32Array(rainCount * 3);
+        this._rainLen = 0.85;
+        const rainPos = new Float32Array(rainCount * 2 * 3);  // 每滴 2 个端点
         for (let i = 0; i < rainCount; i++) {
-            rainPos[i*3]   = (Math.random() - 0.5) * 90;
-            rainPos[i*3+1] = Math.random() * 30;
-            rainPos[i*3+2] = (Math.random() - 0.5) * 90;
+            const x = (Math.random() - 0.5) * 90;
+            const y = Math.random() * 30;
+            const z = (Math.random() - 0.5) * 90;
+            rainPos[i*6]   = x; rainPos[i*6+1] = y + this._rainLen; rainPos[i*6+2] = z;  // 顶
+            rainPos[i*6+3] = x; rainPos[i*6+4] = y;                 rainPos[i*6+5] = z;  // 底
         }
         const rainGeo = new THREE.BufferGeometry();
         rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-        this.rain = new THREE.Points(rainGeo, new THREE.PointsMaterial({
-            color: 0xa8d8f0, size: 0.25, transparent: true, opacity: 0.55,
-            depthWrite: false, fog: true,
+        this.rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+            color: 0xbfe3f5, transparent: true, opacity: 0.5, fog: true,
         }));
         this.rain.visible = false;
         this.scene.add(this.rain);
 
-        // 雪：白色 Points，慢飘 + 横向漂
+        // 雪：白色 Points + 柔和圆雪花贴图（不再是方块），慢飘 + 横向漂
+        const snowTex = makeSnowflakeTexture();
         const snowCount = 500;
         const snowPos = new Float32Array(snowCount * 3);
         const snowDrift = new Float32Array(snowCount);
@@ -5810,7 +5835,7 @@ export class Game3D {
         snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
         this._snowDrift = snowDrift;
         this.snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({
-            color: 0xffffff, size: 0.35, transparent: true, opacity: 0.85,
+            map: snowTex, color: 0xffffff, size: 0.5, transparent: true, opacity: 0.9,
             depthWrite: false, fog: true,
         }));
         this.snow.visible = false;
@@ -5847,13 +5872,18 @@ export class Game3D {
     _stepRain(dt) {
         const pos = this.rain.geometry.attributes.position.array;
         const p = this.player.position;
-        const fall = 28;
-        for (let i = 0; i < pos.length; i += 3) {
+        const fall = 30;
+        const len = this._rainLen;
+        // 每滴 2 个端点（顶=i*6+1，底=i*6+4），整根一起下落；底端落地就回收到玩家头顶
+        for (let i = 0; i < pos.length; i += 6) {
             pos[i+1] -= fall * dt;
-            if (pos[i+1] < 0) {
-                pos[i]   = p.x + (Math.random() - 0.5) * 60;
-                pos[i+1] = 22 + Math.random() * 8;
-                pos[i+2] = p.z + (Math.random() - 0.5) * 60;
+            pos[i+4] -= fall * dt;
+            if (pos[i+4] < 0) {
+                const x = p.x + (Math.random() - 0.5) * 60;
+                const z = p.z + (Math.random() - 0.5) * 60;
+                const y = 22 + Math.random() * 8;
+                pos[i]   = x; pos[i+1] = y + len; pos[i+2] = z;
+                pos[i+3] = x; pos[i+4] = y;       pos[i+5] = z;
             }
         }
         this.rain.geometry.attributes.position.needsUpdate = true;
