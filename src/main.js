@@ -1,7 +1,11 @@
 import { Game3D } from './game3d/Game3D';
 import { Customize } from './game3d/Customize';
+import { Minimap } from './game3d/Minimap';
 
 document.addEventListener('DOMContentLoaded', () => {
+    // 小地图：独立运行，自读 window.__game，不依赖游戏生命周期
+    new Minimap();
+
     const gameContainer = document.getElementById('game-container');
     const overlay = document.getElementById('customize-overlay');
 
