@@ -971,7 +971,7 @@ export class Game3D {
         }
 
         // 室内暖灯（默认灭；夜里进到这间屋才自动点亮，见 _updateHouseTransparency）
-        const lamp = new THREE.PointLight(0xffd599, 0, 9, 1.5);
+        const lamp = new THREE.PointLight(0xffd599, 0, 16, 1.1);
         lamp.position.set(0, H - 1.0, 0);
         group.add(lamp);
         this._lastHouseLamp = lamp;  // 临时存一下，给下面 houses.push 收进 house 对象
@@ -1126,9 +1126,9 @@ export class Game3D {
                 h.wasInside = inside;
                 if (inside) this._unlockAchievement('into_house');
             }
-            // 夜里进到这间屋 → 灯渐亮；出门/天亮 → 渐灭（像进门开灯）
+            // 进屋就开灯：夜里全亮、白天也补一点（屋里被墙挡光容易黑，保证看得清）
             if (h.lamp) {
-                const lampTarget = (inside && night) ? 2.2 : 0;
+                const lampTarget = inside ? (night ? 6.5 : 2.6) : 0;
                 h.lamp.intensity += (lampTarget - h.lamp.intensity) * Math.min(1, 5 * dt);
             }
             const target = inside ? 0.18 : 1.0;
@@ -1619,6 +1619,7 @@ export class Game3D {
         group.rotation.y = ry;
         this.scene.add(group);
         this.lampposts.push({ bulb, lamp });
+        this._addPropCollider(x, z, 0.28, 2.5);
     }
 
     _updateLampposts() {
@@ -2103,6 +2104,7 @@ export class Game3D {
         group.visible = false;  // 默认隐藏
         this.scene.add(group);
         this.snowmen.push(group);
+        this._addPropCollider(x, z, 0.6, 2.0);
     }
 
     _updateSnowmen() {
@@ -2256,6 +2258,7 @@ export class Game3D {
         group.add(bowl);
 
         group.position.set(0, 0, 0); // 广场中心
+        this._addPropCollider(0, 0, 1.5, 1.4);
         this.scene.add(group);
 
         // 水柱粒子
@@ -2310,6 +2313,7 @@ export class Game3D {
 
     _buildBellTower() {
         const x = 7, z = 5;  // 广场边
+        this._addPropCollider(x, z, 1.2, 5);
         const group = new THREE.Group();
         const stoneMat = new THREE.MeshToonMaterial({ color: 0xc8c0b0 });
         // 塔基
@@ -3614,6 +3618,7 @@ export class Game3D {
         group.rotation.y = Math.random() * Math.PI * 2;
         group.scale.setScalar(0.9 + Math.random() * 0.4);
         this.scene.add(group);
+        this._addPropCollider(x, z, 0.5, 2.6);
     }
 
     _buildFishingBoat() {
@@ -6040,7 +6045,7 @@ export class Game3D {
         chandRope.position.set(0, H - 0.5, 0);
         group.add(chandRope);
         // 默认灭；夜里进村屋才自动点亮
-        const ceilingLight = new THREE.PointLight(0xffd599, 0, 12, 1.4);
+        const ceilingLight = new THREE.PointLight(0xffd599, 0, 20, 1.1);
         ceilingLight.position.set(0, H - 1.0, 0);
         group.add(ceilingLight);
 
@@ -6904,6 +6909,7 @@ export class Game3D {
         group.position.set(x, 0, z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
+        this._addPropCollider(x, z, 0.5, 2.6);
     }
 
     _initBirdFlock() {
@@ -7585,6 +7591,14 @@ export class Game3D {
             }
         }
         if (landedOnTop) this.onGround = true;
+    }
+
+    // 给道具登记一个方形碰撞体（树/雪人/路灯/喷泉等，玩家撞上去会被挡，不再穿过）
+    _addPropCollider(x, z, r, h = 2.4) {
+        this.obstacles.push({
+            min: new THREE.Vector3(x - r, 0, z - r),
+            max: new THREE.Vector3(x + r, h, z + r),
+        });
     }
 
     _checkSpikes() {
