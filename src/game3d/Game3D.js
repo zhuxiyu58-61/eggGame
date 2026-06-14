@@ -799,6 +799,8 @@ export class Game3D {
         this._addRooftopCat();
         this._buildSnowBiome();
         this._buildDesertBiome();
+        this._buildSnowSprite();
+        this._buildLakeTurtle();
         this._buildFishingBoat();
         this._buildLighthouse();
         this._initGreetQuest();
@@ -1829,6 +1831,22 @@ export class Game3D {
         this._launchFirework();
         this._showEasterBadge(it.story.replace(/<br>/g, ' '));
         this._unlockAchievement && this._unlockAchievement('quest_' + it.key);
+
+        // —— 区域故事角色的反应 ——
+        if (it.key === 'fireseed' && this._snowSpriteRec) {
+            // 小雪精灵变暖、笑起来
+            if (this._snowSpriteBody) {
+                this._snowSpriteBody.material.color.setHex(0xffd9ec);
+                this._snowSpriteBody.material.emissive.setHex(0xff9ec4);
+            }
+            if (this._snowSpriteHalo) this._snowSpriteHalo.material.color.setHex(0xffc0e0);
+            if (this._snowSpriteMouth) this._snowSpriteMouth.rotation.z = Math.PI;  // ∩→∪ 微笑
+            this._setStoryLine(this._snowSpriteRec, '谢谢你，小蛋！暖和多啦～(*^▽^*)');
+        }
+        if (it.key === 'springpearl') this._reviveOasis();
+        if (it.key === 'moonstone' && this._turtleRec) {
+            this._setStoryLine(this._turtleRec, '谢谢你，小蛋。夜里它会照亮回家的路～');
+        }
 
         if (this.questCount >= this.questItems.length) {
             this._questReady = true;
@@ -3229,6 +3247,14 @@ export class Game3D {
         // 半埋的清泉之珠呼吸式微光
         if (this._oasisGem) {
             this._oasisGem.material.emissiveIntensity = 0.8 + Math.sin(t * 2) * 0.5;
+        }
+        // 绿洲复活渐显（收到清泉之珠后）
+        if (this._oasisFx) {
+            const fx = this._oasisFx;
+            fx.t = Math.min(1, fx.t + dt * 0.5);
+            fx.pond.material.opacity = 0.85 * fx.t;
+            fx.grassRing.material.opacity = 0.9 * fx.t;
+            for (const f of fx.flowers) f.material.opacity = fx.t;
         }
     }
 
@@ -6426,6 +6452,204 @@ export class Game3D {
         });
     }
 
+    // ===================== 区域故事角色（不并进打招呼系统）=====================
+    // 给一个已建好的视觉 group 挂上名字浮标 + 对话气泡，并登记到 storyNpcs
+    _attachStoryNpc(group, name, line, labelY, bubbleY) {
+        if (!this.storyNpcs) this.storyNpcs = [];
+        const cv = document.createElement('canvas');
+        cv.width = 256; cv.height = 72;
+        const ctx = cv.getContext('2d');
+        ctx.font = 'bold 34px "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 6; ctx.lineJoin = 'round';
+        ctx.strokeText(name, 128, 36);
+        ctx.fillStyle = '#2c2c54'; ctx.fillText(name, 128, 36);
+        const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+        const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
+        label.scale.set(1.6, 0.45, 1);
+        label.position.y = labelY;
+        group.add(label);
+
+        const bubble = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeBubbleTexture(line), depthWrite: false, transparent: true, opacity: 0,
+        }));
+        bubble.scale.set(3.4, 1.0, 1);
+        bubble.position.y = bubbleY;
+        bubble.visible = false;
+        group.add(bubble);
+
+        const rec = { group, bubble, phase: Math.random() * Math.PI * 2, baseY: group.position.y };
+        this.storyNpcs.push(rec);
+        return rec;
+    }
+
+    _setStoryLine(rec, line) {
+        if (!rec || !rec.bubble) return;
+        const old = rec.bubble.material.map;
+        rec.bubble.material.map = makeBubbleTexture(line);
+        rec.bubble.material.needsUpdate = true;
+        if (old) old.dispose();
+    }
+
+    _updateStoryNpcs(dt) {
+        if (!this.storyNpcs) return;
+        const t = performance.now() * 0.001;
+        const p = this.player.position;
+        for (const n of this.storyNpcs) {
+            n.group.position.y = (n.baseY || 0) + Math.sin(t * 1.4 + n.phase) * 0.08;
+            const dx = p.x - n.group.position.x;
+            const dz = p.z - n.group.position.z;
+            const dist = Math.hypot(dx, dz);
+            if (dist < 6) {
+                const targetAngle = Math.atan2(dx, dz);
+                let diff = targetAngle - n.group.rotation.y;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                n.group.rotation.y += diff * 0.06;
+            }
+            if (n.bubble) {
+                const targetOp = dist < 4 ? Math.min(1, (4 - dist) / 0.8) : 0;
+                n.bubble.material.opacity += (targetOp - n.bubble.material.opacity) * 0.15;
+                n.bubble.visible = n.bubble.material.opacity > 0.02;
+            }
+        }
+    }
+
+    // 冰雪国·小雪精灵（孤单怕冷，火种被冻住）——在冰湖边
+    _buildSnowSprite() {
+        const group = new THREE.Group();
+        // 柔光光晕（billboard，远处也能一眼看到精灵在哪）
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeSnowflakeTexture(),
+            color: 0x9ed8ff, transparent: true, opacity: 0.5,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        halo.scale.set(2.6, 2.6, 1);
+        halo.position.y = 1.3;
+        group.add(halo);
+        this._snowSpriteHalo = halo;
+        const body = new THREE.Mesh(
+            new THREE.SphereGeometry(0.62, 20, 16),
+            new THREE.MeshStandardMaterial({
+                color: 0xbfe4ff, emissive: 0x77c8ff, emissiveIntensity: 1.1,
+                transparent: true, opacity: 0.92,
+            })
+        );
+        body.position.y = 1.3;
+        group.add(body);
+        this._snowSpriteBody = body;
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0x223355 }));
+            eye.position.set(sx * 0.16, 1.42, -0.42);
+            group.add(eye);
+        }
+        // 默认难过的嘴（∩ 倒弧）
+        const mouth = new THREE.Mesh(
+            new THREE.TorusGeometry(0.08, 0.015, 6, 12, Math.PI),
+            new THREE.MeshBasicMaterial({ color: 0x223355 })
+        );
+        mouth.position.set(0, 1.16, -0.45);
+        group.add(mouth);
+        this._snowSpriteMouth = mouth;
+        // 头顶飘的小雪花
+        const flake = new THREE.Mesh(
+            new THREE.OctahedronGeometry(0.12),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        flake.position.y = 2.0;
+        group.add(flake);
+        this._snowSpriteFlake = flake;
+
+        group.position.set(-30, 0, -90);
+        this.scene.add(group);
+        this._snowSpriteRec = this._attachStoryNpc(
+            group, '小雪精灵', '呜…我把暖灯火种冻在冰里了，好冷好孤单…', 2.5, 3.4
+        );
+    }
+
+    // 月光湖·老乌龟（收着月光石，丢了鱼竿）——在湖边月光石旁
+    _buildLakeTurtle() {
+        const group = new THREE.Group();
+        const shellMat = new THREE.MeshToonMaterial({ color: 0x5a9e5a });
+        const shell = new THREE.Mesh(
+            new THREE.SphereGeometry(0.55, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+            shellMat
+        );
+        shell.position.y = 0.35;
+        shell.scale.set(1, 0.8, 1.2);
+        shell.castShadow = true;
+        addOutline(shell, 0.04);
+        group.add(shell);
+        // 壳上几块深色花纹
+        for (const [bx, bz] of [[0, 0], [0.22, 0.1], [-0.22, 0.1], [0, -0.22]]) {
+            const patch = new THREE.Mesh(
+                new THREE.SphereGeometry(0.12, 8, 6),
+                new THREE.MeshToonMaterial({ color: 0x3f7a3f })
+            );
+            patch.position.set(bx, 0.55, bz);
+            patch.scale.set(1, 0.3, 1);
+            group.add(patch);
+        }
+        // 头
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 10), new THREE.MeshToonMaterial({ color: 0x7bbf7b }));
+        head.position.set(0, 0.42, -0.72);
+        group.add(head);
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), new THREE.MeshBasicMaterial({ color: 0x222222 }));
+            eye.position.set(sx * 0.08, 0.48, -0.88);
+            group.add(eye);
+        }
+        const legMat = new THREE.MeshToonMaterial({ color: 0x6cae6c });
+        for (const [lx, lz] of [[-0.36, -0.28], [0.36, -0.28], [-0.36, 0.3], [0.36, 0.3]]) {
+            const leg = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), legMat);
+            leg.position.set(lx, 0.12, lz);
+            leg.scale.y = 0.7;
+            group.add(leg);
+        }
+        group.position.set(40, 0, -33);
+        this.scene.add(group);
+        this._turtleRec = this._attachStoryNpc(
+            group, '老乌龟', '我的月光石就在那边发亮…帮我把它收好，好吗？', 1.6, 2.4
+        );
+    }
+
+    // 沙漠绿洲复活（收到清泉之珠后触发）：水洼变大池 + 绿草圈 + 冒花
+    _reviveOasis() {
+        if (this._oasisRevived) return;
+        this._oasisRevived = true;
+        const ox = -30, oz = 116;  // 与 _buildDesertBiome 的 oasisX/oasisZ 一致
+        const pond = new THREE.Mesh(
+            new THREE.CircleGeometry(6, 32),
+            new THREE.MeshStandardMaterial({ color: 0x4fc4d8, metalness: 0.1, roughness: 0.35, transparent: true, opacity: 0 })
+        );
+        pond.rotation.x = -Math.PI / 2;
+        pond.position.set(ox, 0.07, oz);
+        this.scene.add(pond);
+        const grassRing = new THREE.Mesh(
+            new THREE.RingGeometry(6, 9, 32),
+            new THREE.MeshToonMaterial({ color: 0x6cba5a, transparent: true, opacity: 0, side: THREE.DoubleSide })
+        );
+        grassRing.rotation.x = -Math.PI / 2;
+        grassRing.position.set(ox, 0.06, oz);
+        this.scene.add(grassRing);
+        const flowerColors = [0xff7ab0, 0xffd24a, 0xff6f5a, 0xc77bff];
+        const flowers = [];
+        for (let i = 0; i < 12; i++) {
+            const a = Math.random() * Math.PI * 2, r = 6.4 + Math.random() * 2.4;
+            const f = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18, 8, 6),
+                new THREE.MeshToonMaterial({ color: flowerColors[i % 4], transparent: true, opacity: 0 })
+            );
+            f.position.set(ox + Math.cos(a) * r, 0.2, oz + Math.sin(a) * r);
+            f.scale.y = 0.6;
+            this.scene.add(f);
+            flowers.push(f);
+        }
+        this._oasisFx = { pond, grassRing, flowers, t: 0 };
+        this._playWin();
+        this._showEasterBadge('🌿 绿洲活过来啦！清泉重新冒水了～');
+    }
+
     _updateAnimDecor() {
         if (!this.animDecor) return;
         const t = performance.now() * 0.001;
@@ -7444,6 +7668,7 @@ export class Game3D {
         this._updateCompanion(dt);
         this._updateAnimDecor();
         this._updateNPCs();
+        this._updateStoryNpcs(dt);
         this._updateLightning(dt);
         this._updateHouseTransparency(dt);
         this._checkBeds(dt);
