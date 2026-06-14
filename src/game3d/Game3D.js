@@ -7,6 +7,14 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { loadStyle, hexToInt } from './style';
 
+// 怪物种类：普通紫幽灵 / 快速小怪 / 笨重大怪 / 假宝箱变的咬人怪
+const MONSTER_TYPES = {
+    normal: { r: 0.40, color: 0x8050a0, hp: 3, speed: 3.5, dmg: 1, knock: 6,  aggro: 10, drop: 0,    label: '幽灵' },
+    fast:   { r: 0.27, color: 0xff6488, hp: 2, speed: 5.6, dmg: 1, knock: 4,  aggro: 13, drop: 0,    label: '飞蝠' },
+    tank:   { r: 0.62, color: 0x4a7a44, hp: 6, speed: 2.0, dmg: 2, knock: 10, aggro: 9,  drop: 0,    label: '巨怪' },
+    mimic:  { r: 0.42, color: 0x8a5a2e, hp: 2, speed: 4.8, dmg: 1, knock: 7,  aggro: 16, drop: 6000, label: '咬人箱' },
+};
+
 // 卡通描边：反向法线 + 略放大；颜色 = 物体自身色压暗（不再用统一深紫，避免突兀）
 const OUTLINE_THICK = 0.035;
 function darkenHex(hex, factor = 0.45) {
@@ -499,7 +507,7 @@ export class Game3D {
         this.container.appendChild(this.renderer.domElement);
 
         this.scene = new THREE.Scene();
-        this.scene.fog = new THREE.Fog('#d8ecf5', 58, 150);
+        this.scene.fog = new THREE.Fog('#d8ecf5', 70, 230);  // 扩图后远雾推远，远山仍若隐若现
 
         // 所有 MeshToonMaterial 自动挂三阶 ramp（真赛璐璐分层光影）
         // 包一层 scene.add：后续无论谁创建的物体，进场景时统一打补丁
@@ -527,7 +535,7 @@ export class Game3D {
         this._createSkyDome();
 
         this.camera = new THREE.PerspectiveCamera(
-            72, window.innerWidth / window.innerHeight, 0.1, 200
+            72, window.innerWidth / window.innerHeight, 0.1, 280  // 扩图后远裁剪面 200→280，远山不被切
         );
         this.cameraTarget = new THREE.Vector3();
         this.velocity = { x: 0, z: 0 };
@@ -691,11 +699,12 @@ export class Game3D {
     }
 
     _buildWorld() {
-        // 大地面：草地噪声纹理 + 重复 22 次
+        // 大地面：草地噪声纹理（扩图 220→320，repeat 同步 22→32 保持草密度）
         const grassTex = makeGrassTexture();
         grassTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+        grassTex.repeat.set(32, 32);
         const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(220, 220),
+            new THREE.PlaneGeometry(320, 320),
             new THREE.MeshToonMaterial({ map: grassTex })
         );
         ground.rotation.x = -Math.PI / 2;
@@ -789,6 +798,7 @@ export class Game3D {
         this._initWind();
         this._addRooftopCat();
         this._buildSnowBiome();
+        this._buildDesertBiome();
         this._buildFishingBoat();
         this._buildLighthouse();
         this._initGreetQuest();
@@ -817,6 +827,8 @@ export class Game3D {
         this._initExtraction();
         this._buildChests();
         this._buildMonsters();
+        // ===== 区域感受系统（冷/热/清凉 + 进区故事旁白）=====
+        this._initRegionFeel();
     }
 
     _buildHouses() {
@@ -2819,6 +2831,477 @@ export class Game3D {
         }
     }
 
+    _buildDesertBiome() {
+        // 南边 (z > +78) 进入太阳沙漠：暖沙地 + 仙人掌 + 沙丘 + 干涸绿洲 + 沙岩金字塔
+        // （起点压在 z78 之后，给村屋 z58 / 后院金币 z67 留出缓冲）
+        const sandGround = new THREE.Mesh(
+            new THREE.PlaneGeometry(170, 84),
+            new THREE.MeshToonMaterial({ color: 0xe7cd96 })
+        );
+        sandGround.rotation.x = -Math.PI / 2;
+        sandGround.position.set(0, 0.03, 118);
+        sandGround.receiveShadow = true;
+        this.scene.add(sandGround);
+
+        // 沙地边缘渐变（深一点的沙做过渡，盖住草沙接缝）
+        const edge = new THREE.Mesh(
+            new THREE.PlaneGeometry(170, 7),
+            new THREE.MeshToonMaterial({ color: 0xd8bb7e, transparent: true, opacity: 0.75 })
+        );
+        edge.rotation.x = -Math.PI / 2;
+        edge.position.set(0, 0.035, 77);
+        this.scene.add(edge);
+
+        // 沙波纹（细长扁平的浅色弧，平铺地面增加层次）
+        const rippleMat = new THREE.MeshToonMaterial({ color: 0xf0dcab, transparent: true, opacity: 0.5 });
+        for (let i = 0; i < 16; i++) {
+            const rip = new THREE.Mesh(new THREE.PlaneGeometry(6 + Math.random() * 8, 0.9), rippleMat);
+            rip.rotation.x = -Math.PI / 2;
+            rip.rotation.z = (Math.random() - 0.5) * 0.6;
+            rip.position.set((Math.random() - 0.5) * 150, 0.04, 84 + Math.random() * 70);
+            this.scene.add(rip);
+        }
+
+        const inDesert = (x, z) => x > -78 && x < 78 && z > 80 && z < 158;
+
+        // 仙人掌散布
+        for (let i = 0; i < 18; i++) {
+            const x = (Math.random() - 0.5) * 150;
+            const z = 82 + Math.random() * 72;
+            if (!inDesert(x, z)) continue;
+            this._addCactus(x, z);
+        }
+
+        // 沙丘（压扁的暖沙球，错落几堆）
+        const duneMat = new THREE.MeshToonMaterial({ color: 0xddc086 });
+        for (let i = 0; i < 16; i++) {
+            const x = (Math.random() - 0.5) * 150;
+            const z = 82 + Math.random() * 74;
+            if (!inDesert(x, z)) continue;
+            const dune = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 8), duneMat);
+            const s = 2 + Math.random() * 4;
+            dune.scale.set(s, s * 0.28, s * (0.7 + Math.random() * 0.6));
+            dune.rotation.y = Math.random() * Math.PI;
+            dune.position.set(x, 0, z);
+            dune.receiveShadow = true;
+            this.scene.add(dune);
+        }
+
+        // 干涸的绿洲：龟裂土圈 + 仅剩一小汪水 + 几棵蔫椰子树（呼应「清泉之珠被埋」故事）
+        const oasisX = -30, oasisZ = 116;
+        const crackedEarth = new THREE.Mesh(
+            new THREE.CircleGeometry(9, 32),
+            new THREE.MeshToonMaterial({ color: 0xb89760 })
+        );
+        crackedEarth.rotation.x = -Math.PI / 2;
+        crackedEarth.position.set(oasisX, 0.045, oasisZ);
+        this.scene.add(crackedEarth);
+        // 仅剩的一小汪水（暗示快干了）
+        const puddle = new THREE.Mesh(
+            new THREE.CircleGeometry(2.4, 24),
+            new THREE.MeshStandardMaterial({ color: 0x5fb9c4, metalness: 0.1, roughness: 0.4, transparent: true, opacity: 0.85 })
+        );
+        puddle.rotation.x = -Math.PI / 2;
+        puddle.position.set(oasisX, 0.06, oasisZ);
+        this.scene.add(puddle);
+        this._addPalmTree(oasisX - 5, oasisZ - 2, 0.12);
+        this._addPalmTree(oasisX + 4, oasisZ + 3, -0.18);
+        this._addPalmTree(oasisX + 6, oasisZ - 4, 0.1);
+        // 半埋的「清泉之珠」微光（留给下次任务主线接，先做个发光暗示）
+        const gem = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 16, 12),
+            new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x3399cc, emissiveIntensity: 1.2, transparent: true, opacity: 0.9 })
+        );
+        gem.position.set(oasisX + 1.5, 0.2, oasisZ + 5);
+        this.scene.add(gem);
+        this._oasisGem = gem;
+
+        // 沙岩金字塔（沙漠地标，呼应雪区的冰屋）
+        const pyramid = new THREE.Mesh(
+            new THREE.ConeGeometry(7, 9, 4),
+            new THREE.MeshToonMaterial({ color: 0xd9b878 })
+        );
+        pyramid.position.set(34, 4.4, 110);
+        pyramid.rotation.y = Math.PI / 4;
+        pyramid.castShadow = true;
+        addOutline(pyramid, 0.05);
+        this.scene.add(pyramid);
+        // 金字塔登记碰撞（蛋绕着走，不穿过）
+        this.obstacles.push({
+            min: new THREE.Vector3(34 - 5, 0, 110 - 5),
+            max: new THREE.Vector3(34 + 5, 7, 110 + 5),
+        });
+
+        // 晒白的小石头/骨头点缀
+        const boneMat = new THREE.MeshToonMaterial({ color: 0xeae0cf });
+        for (let i = 0; i < 8; i++) {
+            const x = (Math.random() - 0.5) * 140;
+            const z = 84 + Math.random() * 70;
+            if (!inDesert(x, z)) continue;
+            const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5 + Math.random() * 0.5), boneMat);
+            rock.position.set(x, 0.2, z);
+            rock.rotation.set(Math.random(), Math.random(), Math.random());
+            this.scene.add(rock);
+        }
+
+        this._initDesertFX();
+    }
+
+    _addCactus(x, z) {
+        const group = new THREE.Group();
+        const mat = new THREE.MeshToonMaterial({ color: 0x4f9e5a });
+        const h = 1.6 + Math.random() * 1.4;
+        // 主干
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, h, 10), mat);
+        trunk.position.y = h / 2;
+        trunk.castShadow = true;
+        addOutline(trunk, 0.04);
+        group.add(trunk);
+        // 1~2 条手臂
+        const arms = 1 + (Math.random() > 0.5 ? 1 : 0);
+        for (let a = 0; a < arms; a++) {
+            const side = a === 0 ? 1 : -1;
+            const armY = h * (0.45 + Math.random() * 0.2);
+            const hPart = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 0.6, 8), mat);
+            hPart.rotation.z = Math.PI / 2;
+            hPart.position.set(side * 0.45, armY, 0);
+            group.add(hPart);
+            const vPart = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 0.7, 8), mat);
+            vPart.position.set(side * 0.72, armY + 0.55, 0);
+            addOutline(vPart, 0.03);
+            group.add(vPart);
+        }
+        // 顶上一朵小红花
+        if (Math.random() > 0.4) {
+            const flower = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18, 10, 8),
+                new THREE.MeshToonMaterial({ color: 0xff6f8f })
+            );
+            flower.position.y = h + 0.1;
+            flower.scale.y = 0.6;
+            group.add(flower);
+        }
+        group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI;
+        this.scene.add(group);
+        // 仙人掌算软障碍（蛋别穿过去）
+        this.obstacles.push({
+            min: new THREE.Vector3(x - 0.4, 0, z - 0.4),
+            max: new THREE.Vector3(x + 0.4, h, z + 0.4),
+        });
+    }
+
+    // 沙漠专属氛围：贴地飘的热气浮尘（不依赖全局天气）
+    _initDesertFX() {
+        const count = 160;
+        const dp = new Float32Array(count * 3);
+        this._dustSpeed = new Float32Array(count);
+        this._dustPhase = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+            dp[i * 3]     = (Math.random() - 0.5) * 160;
+            dp[i * 3 + 1] = Math.random() * 5;
+            dp[i * 3 + 2] = 78 + Math.random() * 80;
+            this._dustSpeed[i] = 0.3 + Math.random() * 0.7;
+            this._dustPhase[i] = Math.random() * Math.PI * 2;
+        }
+        const dustGeo = new THREE.BufferGeometry();
+        dustGeo.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+        this.desertDust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+            color: 0xf0dca8, size: 0.22,
+            transparent: true, opacity: 0.5, depthWrite: false, sizeAttenuation: true,
+            blending: THREE.AdditiveBlending,
+        }));
+        this.desertDust.frustumCulled = false;
+        this.scene.add(this.desertDust);
+    }
+
+    _updateDesertFX(dt) {
+        if (!this.desertDust) return;
+        // 玩家离沙漠远就整体跳过
+        const nearDesert = this.player.position.z > 62;
+        this.desertDust.visible = nearDesert;
+        if (!nearDesert) return;
+        const t = performance.now() * 0.001;
+        const pos = this.desertDust.geometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            // 热气上升 + 横向飘
+            let y = pos.getY(i) + this._dustSpeed[i] * dt * 0.6;
+            if (y > 6) y = 0.1;
+            pos.setY(i, y);
+            pos.setX(i, pos.getX(i) + Math.sin(t * 0.8 + this._dustPhase[i]) * dt * 0.5);
+        }
+        pos.needsUpdate = true;
+        // 半埋的清泉之珠呼吸式微光
+        if (this._oasisGem) {
+            this._oasisGem.material.emissiveIntensity = 0.8 + Math.sin(t * 2) * 0.5;
+        }
+    }
+
+    // ===================== 区域感受系统 =====================
+    _initRegionFeel() {
+        this._currentRegion = 'home';
+        this._coldT = 0; this._heatT = 0; this._coolT = 0;
+        this._feelSfxT = 0; this._breathT = 0; this._sweatT = 0;
+        this._breathPuffs = [];
+        this._sweatDrops = [];
+
+        // 每个区域的进区故事旁白 + 色调
+        this._regionMeta = {
+            snow:   { story: '❄️ 冰雪国<br>好冷呀～蛋蛋冻得直打哆嗦。<br>听说雪山深处住着孤单的小雪精灵…' },
+            desert: { story: '🔥 太阳沙漠<br>好热！汗都冒出来了。<br>绿洲快干了，清泉之珠被埋在沙子里…' },
+            lake:   { story: '🌊 月光湖<br>水边好清凉～<br>湖底的老乌龟好像在找什么东西。' },
+            home:   { story: '🌿 回到温暖的村庄，真舒服~' },
+        };
+
+        // 进区故事气泡（顶部居中卡片）
+        this._feelChip = document.createElement('div');
+        Object.assign(this._feelChip.style, {
+            position: 'fixed', top: '15%', left: '50%',
+            transform: 'translate(-50%, -50%) scale(0.9)',
+            padding: '14px 26px', maxWidth: '80vw',
+            background: 'rgba(0,0,0,0.45)', color: '#fff',
+            fontSize: '21px', fontWeight: 'bold', lineHeight: '1.6',
+            borderRadius: '18px', textAlign: 'center',
+            boxShadow: '0 6px 22px rgba(0,0,0,0.3)',
+            zIndex: '21', pointerEvents: 'none',
+            transition: 'opacity 0.5s, transform 0.5s', opacity: '0',
+            backdropFilter: 'blur(2px)',
+        });
+        document.body.appendChild(this._feelChip);
+
+        // 全屏色调晕影 overlay（冷蓝/暖橙/清凉青）
+        this._tintEl = document.createElement('div');
+        Object.assign(this._tintEl.style, {
+            position: 'fixed', inset: '0',
+            pointerEvents: 'none', zIndex: '15',
+            opacity: '0', transition: 'opacity 0.8s',
+        });
+        document.body.appendChild(this._tintEl);
+    }
+
+    _regionAt(x, z) {
+        if (z < -60 && Math.abs(x) < 75) return 'snow';
+        if (z > 78 && Math.abs(x) < 78) return 'desert';
+        if (Math.hypot(x - 48, z + 42) < 26) return 'lake';
+        return 'home';
+    }
+
+    _updateRegionFeel(dt) {
+        if (!this._feelChip) return;
+        const p = this.player.position;
+        const region = this._regionAt(p.x, p.z);
+
+        // 进入新区域：弹故事旁白 + 进区音效
+        if (region !== this._currentRegion) {
+            this._currentRegion = region;
+            this._showRegionStory(region);
+        }
+
+        // 各区"深入度"：越往里感受越强
+        let coldTarget = 0, heatTarget = 0, coolTarget = 0;
+        if (region === 'snow')   coldTarget = Math.max(0.25, Math.min(1, (-60 - p.z) / 50));
+        if (region === 'desert') heatTarget = Math.max(0.25, Math.min(1, (p.z - 78) / 55));
+        if (region === 'lake')   coolTarget = 0.6;
+        this._coldT = approach(this._coldT, coldTarget, dt * 1.5);
+        this._heatT = approach(this._heatT, heatTarget, dt * 1.5);
+        this._coolT = approach(this._coolT, coolTarget, dt * 1.5);
+
+        // —— 画面色调晕影 ——
+        if (this._coldT > 0.02) {
+            this._tintEl.style.background =
+                `radial-gradient(ellipse at center, transparent 30%, rgba(90,150,230,0.55) 100%)`;
+            this._tintEl.style.opacity = String(this._coldT);
+        } else if (this._heatT > 0.02) {
+            // 暖橙 + 轻微脉动模拟热浪
+            const wob = 0.85 + Math.sin(performance.now() * 0.004) * 0.15;
+            this._tintEl.style.background =
+                `radial-gradient(ellipse at center, transparent 26%, rgba(238,150,55,0.5) 100%)`;
+            this._tintEl.style.opacity = String(Math.min(1, this._heatT * wob));
+        } else if (this._coolT > 0.02) {
+            this._tintEl.style.background =
+                `radial-gradient(ellipse at center, transparent 42%, rgba(80,205,210,0.35) 100%)`;
+            this._tintEl.style.opacity = String(this._coolT);
+        } else {
+            this._tintEl.style.opacity = '0';
+        }
+
+        // —— 身体动作（死亡/通关时不抖，免得跟其它动画打架）——
+        if (!this.dying && !this.won) {
+            this._applyShiver();
+            this._applyHeatBody();
+        }
+        this._updateBreath(dt);   // 冷：吐白气
+        this._updateSweat(dt);    // 热：汗珠
+        this._updateFeelSfx(dt);  // 冷哆嗦声 / 热知了声
+    }
+
+    _applyShiver() {
+        if (!this.animRoot) return;
+        if (this._coldT > 0.05) {
+            const t = performance.now() * 0.001;
+            const amp = 0.045 * this._coldT;
+            this.animRoot.position.x = Math.sin(t * 38) * amp;
+            this.animRoot.rotation.z = Math.sin(t * 41 + 1) * amp * 0.8;
+        } else {
+            // 回正（也兜底热区/离开后归零）
+            this.animRoot.position.x *= 0.8;
+            this.animRoot.rotation.z *= 0.8;
+        }
+    }
+
+    _applyHeatBody() {
+        if (!this.animRoot || this._heatT <= 0.05) return;
+        // 蔫蔫地：整体压扁一点 + 无力地轻晃（叠在 anim scale 之上）
+        const t = performance.now() * 0.001;
+        this.animRoot.scale.y *= (1 - 0.07 * this._heatT);
+        this.animRoot.rotation.z = Math.sin(t * 1.4) * 0.06 * this._heatT;
+    }
+
+    _updateBreath(dt) {
+        // 冷天周期性吐白气
+        if (this._coldT > 0.2 && !this.dying && !this.won) {
+            this._breathT -= dt;
+            if (this._breathT <= 0) {
+                this._breathT = 1.3 + Math.random() * 0.9;
+                this._spawnBreathPuff();
+            }
+        }
+        for (let i = this._breathPuffs.length - 1; i >= 0; i--) {
+            const b = this._breathPuffs[i];
+            b.life -= dt;
+            b.mesh.position.x += b.vx * dt;
+            b.mesh.position.y += dt * 0.5;
+            b.mesh.position.z += b.vz * dt;
+            const k = 1 - b.life / b.full;
+            b.mesh.scale.setScalar(0.3 + k * 0.9);
+            b.mesh.material.opacity = 0.5 * (1 - k);
+            if (b.life <= 0) {
+                this.scene.remove(b.mesh);
+                b.mesh.geometry.dispose(); b.mesh.material.dispose();
+                this._breathPuffs.splice(i, 1);
+            }
+        }
+    }
+
+    _spawnBreathPuff() {
+        const p = this.player.position;
+        const ry = this.player.rotation.y;
+        const fx = Math.sin(ry), fz = -Math.cos(ry);  // 蛋脸朝向
+        const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false })
+        );
+        mesh.position.set(p.x + fx * 0.7, p.y + 0.9, p.z + fz * 0.7);
+        mesh.scale.setScalar(0.3);
+        this.scene.add(mesh);
+        this._breathPuffs.push({ mesh, life: 1.4, full: 1.4, vx: fx * 0.6, vz: fz * 0.6 });
+    }
+
+    _updateSweat(dt) {
+        if (this._heatT > 0.25 && !this.dying && !this.won) {
+            this._sweatT -= dt;
+            if (this._sweatT <= 0) {
+                this._sweatT = 0.6 + Math.random() * 0.6;
+                this._spawnSweatDrop();
+            }
+        }
+        for (let i = this._sweatDrops.length - 1; i >= 0; i--) {
+            const s = this._sweatDrops[i];
+            s.life -= dt;
+            s.vy -= dt * 6;
+            s.mesh.position.y += s.vy * dt;
+            if (s.life <= 0 || s.mesh.position.y < 0.06) {
+                this.scene.remove(s.mesh);
+                s.mesh.geometry.dispose(); s.mesh.material.dispose();
+                this._sweatDrops.splice(i, 1);
+            }
+        }
+    }
+
+    _spawnSweatDrop() {
+        const p = this.player.position;
+        const ry = this.player.rotation.y;
+        const fx = Math.sin(ry), fz = -Math.cos(ry);
+        const side = (Math.random() - 0.5) * 0.8;
+        const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(0.08, 8, 6),
+            new THREE.MeshStandardMaterial({ color: 0xbfe8f5, transparent: true, opacity: 0.9 })
+        );
+        mesh.scale.y = 1.4;
+        // 额头侧边滴落
+        mesh.position.set(
+            p.x + fx * 0.45 + Math.cos(ry) * side,
+            p.y + 1.05,
+            p.z + fz * 0.45 + Math.sin(ry) * side
+        );
+        this.scene.add(mesh);
+        this._sweatDrops.push({ mesh, life: 1.3, vy: 0 });
+    }
+
+    _updateFeelSfx(dt) {
+        if (!this.audioCtx || this.bgmMuted) return;
+        this._feelSfxT -= dt;
+        if (this._feelSfxT > 0) return;
+        if (this._coldT > 0.3) {
+            this._feelSfxT = 2.2 + Math.random() * 1.6;
+            this._playChatter();
+        } else if (this._heatT > 0.3) {
+            this._feelSfxT = 3 + Math.random() * 2;
+            this._playCicada();
+        } else {
+            this._feelSfxT = 1;
+        }
+    }
+
+    _playChatter() {
+        // 牙齿打颤：一串极短的高频 click
+        for (let i = 0; i < 6; i++) {
+            this._tone(880 + Math.random() * 240, 0.04, 'square', 0.022, i * 0.06);
+        }
+    }
+
+    _playCicada() {
+        // 知了：带颤音的方波 buzz
+        if (!this.audioCtx) return;
+        const ctx = this.audioCtx;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.value = 1400;
+        lfo.frequency.value = 28;        // 颤音速率
+        lfoGain.gain.value = 220;
+        lfo.connect(lfoGain); lfoGain.connect(o.frequency);
+        const t0 = ctx.currentTime;
+        g.gain.value = 0;
+        g.gain.linearRampToValueAtTime(0.018, t0 + 0.12);
+        g.gain.linearRampToValueAtTime(0.018, t0 + 1.2);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.6);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t0); lfo.start(t0);
+        o.stop(t0 + 1.7); lfo.stop(t0 + 1.7);
+    }
+
+    _showRegionStory(region) {
+        const meta = this._regionMeta[region];
+        if (!meta) return;
+        this._feelChip.innerHTML = meta.story;
+        this._feelChip.style.opacity = '1';
+        this._feelChip.style.transform = 'translate(-50%, -50%) scale(1)';
+        clearTimeout(this._feelTimer);
+        this._feelTimer = setTimeout(() => {
+            this._feelChip.style.opacity = '0';
+            this._feelChip.style.transform = 'translate(-50%, -50%) scale(0.9)';
+        }, region === 'home' ? 2200 : 3800);
+        // 进区音效提示（遵守静音）
+        if (!this.bgmMuted) {
+            if (region === 'snow')        [1200, 900, 700].forEach((f, i) => this._tone(f, 0.18, 'sine', 0.05, i * 0.08));
+            else if (region === 'desert') [300, 380].forEach((f, i) => this._tone(f, 0.3, 'sawtooth', 0.04, i * 0.12));
+            else if (region === 'lake')   [700, 1050, 1400].forEach((f, i) => this._tone(f, 0.14, 'sine', 0.05, i * 0.07));
+        }
+    }
+
     // 雪区专属氛围：永驻小雪 + 雪面闪晶（不依赖全局天气）
     _initSnowFX() {
         // 永驻小雪：只飘在雪区上空
@@ -3772,16 +4255,48 @@ export class Game3D {
         group.position.set(x, 0, z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
-        this.chests.push({
-            group, lidPivot, light: innerLight,
+        const c = {
+            group, lidPivot, light: innerLight, body, lid,
+            origBodyHex: s.body, origLidHex: s.lid,
             x, z, state: 'closed', animT: 0,
             rewardSprite: null,
-        });
+            golden: false, mimic: false, respawnT: 0,
+        };
+        this.chests.push(c);
+        this._rollChestVariant(c);  // 决定本箱是普通/金箱/咬人箱并上色
         // 注册为障碍（防止穿过）— 小一点的 AABB
         this.obstacles.push({
             min: new THREE.Vector3(x - 0.5, 0, z - 0.4),
             max: new THREE.Vector3(x + 0.5, 0.6, z + 0.4),
         });
+    }
+
+    // 决定一只箱子的变体（每次刷新都重掷）：金箱一眼识别、咬人箱外观与普通箱无异（不能预判）
+    _rollChestVariant(c) {
+        const dist = Math.hypot(c.x, c.z);
+        const tier = dist < 25 ? 0 : dist < 55 ? 1 : 2;
+        // 越远金箱越多、咬人箱也越多（越远越好越危险）
+        const goldChance  = [0.05, 0.10, 0.18][tier];
+        const mimicChance = [0.06, 0.10, 0.15][tier];
+        const roll = Math.random();
+        c.golden = roll < goldChance;
+        c.mimic = !c.golden && roll < goldChance + mimicChance;
+        // 上色
+        if (c.golden) {
+            c.body.material.color.setHex(0xffcf40);
+            c.body.material.emissive = c.body.material.emissive || new THREE.Color();
+            c.body.material.emissive.setHex(0x8a6010);
+            c.lid.material.color.setHex(0xffe070);
+            c.lid.material.emissive = c.lid.material.emissive || new THREE.Color();
+            c.lid.material.emissive.setHex(0x8a6010);
+        } else {
+            // 普通 / 咬人箱外观一致：还原本来的木色（咬人箱故意不露馅）
+            c.body.material.color.setHex(c.origBodyHex);
+            if (c.body.material.emissive) c.body.material.emissive.setHex(0x000000);
+            c.lid.material.color.setHex(c.origLidHex);
+            if (c.lid.material.emissive) c.lid.material.emissive.setHex(0x000000);
+            c.light.intensity = 0;
+        }
     }
 
     _updateChests(dt) {
@@ -3790,12 +4305,20 @@ export class Game3D {
         const t = performance.now() * 0.001;
         for (const c of this.chests) {
             if (c.state === 'closed') {
+                // 金箱：轻飘 + 脉冲金光（一眼识别）
+                if (c.golden) {
+                    c.group.position.y = Math.sin(t * 2 + c.x) * 0.12 + 0.05;
+                    c.group.rotation.y += dt * 0.6;
+                    c.light.color.setHex(0xffd23a);
+                    c.light.intensity = 1.4 + Math.sin(t * 4) * 0.5;
+                }
                 const dx = p.x - c.x, dz = p.z - c.z;
-                if (Math.hypot(dx, dz) < 1.6) this._openChest(c);
+                if (Math.hypot(dx, dz) < 1.6 && p.y < 1.6) this._openChest(c);
             } else if (c.state === 'opening') {
                 c.animT += dt;
                 // 盖子开 0→-1.3 rad
                 c.lidPivot.rotation.x = Math.max(-1.3, -c.animT * 2.5);
+                c.light.color.setHex(0xffd700);
                 c.light.intensity = Math.min(2.2, c.animT * 4);
                 if (c.rewardSprite) {
                     c.rewardSprite.position.y = 0.6 + c.animT * 1.2;
@@ -3806,31 +4329,101 @@ export class Game3D {
                 }
                 if (c.animT > 2.5) {
                     c.state = 'opened';
+                    c.respawnT = 22 + Math.random() * 16;  // 22-38s 后重新长出宝箱
                     if (c.rewardSprite) {
                         c.group.remove(c.rewardSprite);
                         c.rewardSprite.material.map?.dispose();
                         c.rewardSprite.material.dispose();
                         c.rewardSprite = null;
                     }
-                    c.light.intensity = 0.4;  // 空盒留一点微光
+                    c.light.intensity = 0.2;  // 空盒留一点微光
+                }
+            } else if (c.state === 'opened') {
+                // 刷新倒计时：玩家不在近旁时才长出来（别在脚下突然弹箱）
+                c.respawnT -= dt;
+                if (c.respawnT <= 0) {
+                    const near = Math.hypot(p.x - c.x, p.z - c.z) < 4;
+                    if (!near) this._respawnChest(c);
+                }
+            } else if (c.state === 'popping') {
+                // 刷新弹出：盖子合上 + 缩放从 0 弹到 1
+                c.animT += dt;
+                const s = Math.min(1, c.animT * 2.2);
+                const ease = 1 - Math.pow(1 - s, 3);
+                c.group.scale.setScalar(ease);
+                if (c.animT >= 0.5) {
+                    c.group.scale.setScalar(1);
+                    c.state = 'closed';
                 }
             }
         }
     }
 
-    _rollLoot() {
-        let r = Math.random();
-        for (const item of this.lootTable) {
-            if (r < item.rarity) return item;
-            r -= item.rarity;
+    _respawnChest(c) {
+        c.lidPivot.rotation.x = 0;
+        c.group.position.y = 0;
+        c.group.visible = true;        // 咬人箱怪那波把箱体藏了，刷新时恢复
+        c.group.scale.setScalar(0.01);
+        c.light.intensity = 0;
+        c.animT = 0;
+        c.state = 'popping';
+        this._rollChestVariant(c);   // 重新掷变体：这次可能变成金箱/咬人箱
+        this._tone(520, 0.12, 'sine', 0.04);
+    }
+
+    _rollLoot(dist = 30) {
+        // 距离分层：越远高级宝石越多、垃圾越少，但诅咒也越多（越好越危险）
+        const tier = dist < 25 ? 0 : dist < 55 ? 1 : 2;
+        const weights = this.lootTable.map(it => {
+            let w = it.rarity;
+            if (it.kind === 'gem') {
+                const lvl = it.value >= 50000 ? 4 : it.value >= 15000 ? 3 : it.value >= 5000 ? 2 : it.value >= 2000 ? 1 : 0;
+                w *= Math.pow([1, 1.8, 3.2][tier], lvl / 2);
+                if (lvl === 0) w *= [1, 0.7, 0.4][tier];      // 低级宝石远处变少
+            } else if (it.kind === 'junk' || it.kind === 'empty') {
+                w *= [1, 0.6, 0.3][tier];                      // 垃圾远处变少
+            } else if (it.kind === 'curse') {
+                w *= [1, 1.1, 1.35][tier];                     // 诅咒远处变多
+            }
+            return w;
+        });
+        const total = weights.reduce((a, b) => a + b, 0);
+        let r = Math.random() * total;
+        for (let i = 0; i < this.lootTable.length; i++) {
+            if (r < weights[i]) return this.lootTable[i];
+            r -= weights[i];
         }
         return this.lootTable[0];
     }
 
+    _triggerMimic(c) {
+        // 咬人箱：咬一口（掉血+击退）后站起来变成怪，箱体暂时消失、稍后再刷新成箱
+        c.state = 'opened';
+        c.respawnT = 26 + Math.random() * 14;
+        c.group.visible = false;
+        const p = this.player.position;
+        this._showEasterBadge('😱 是咬人箱！');
+        this._tone(110, 0.18, 'sawtooth', 0.09);
+        this._tone(70, 0.3, 'square', 0.07, 0.08);
+        if (this._invincible <= 0) this._hurtPlayer(1, p.x - c.x, p.z - c.z);
+        this._addMonster(c.x, c.z, 'mimic');
+    }
+
     _openChest(c) {
+        if (c.mimic) { this._triggerMimic(c); return; }
         c.state = 'opening';
         c.animT = 0;
-        const loot = this._rollLoot();
+        c.group.position.y = 0;  // 金箱落地停转
+        const dist = Math.hypot(c.x, c.z);
+        let loot;
+        if (c.golden) {
+            // 金箱保底高级宝石：70% 史诗、30% 传说
+            const epic = this.lootTable.find(it => it.value === 15000);
+            const legend = this.lootTable.find(it => it.value === 50000);
+            loot = Math.random() < 0.3 ? legend : epic;
+        } else {
+            loot = this._rollLoot(dist);
+        }
 
         // 应用效果
         if (loot.kind === 'gem' || loot.kind === 'curse') {
@@ -3908,28 +4501,36 @@ export class Game3D {
         this.playerHPMax = 5;
         this._attackCooldown = 0;
         this._invincible = 0;
-        // 等 DOM 准备好再画一次血条
-        setTimeout(() => this._renderPlayerHP(), 50);
+        // 头顶血条 + 首画血条延后：此刻 this.player 还没建（_buildPlayer 在 _buildWorld 之后）
+        setTimeout(() => { this._buildPlayerHPBar(); this._renderPlayerHP(); }, 50);
+        // 按距离分布：近处普通、中圈混快怪、远处大怪镇守（越远越危险）
         const spots = [
-            { x: 18, z: -8 },          // 东路
-            { x: -18, z: -8 },         // 西路
-            { x: 0, z: -25 },          // 北路
-            { x: 22, z: 28 },          // 撤离点附近（阻拦）
-            { x: 30, z: 38 },          // 撤离点东侧
+            { x: 18, z: -8,  type: 'normal' },   // 东路
+            { x: -18, z: -8, type: 'normal' },   // 西路
+            { x: 0, z: -25,  type: 'fast' },     // 北路（中圈）
+            { x: 22, z: 28,  type: 'normal' },   // 撤离点附近（阻拦）
+            { x: 30, z: 38,  type: 'tank' },     // 撤离点外（守门大怪）
+            { x: -55, z: 30, type: 'fast' },     // 远·西南
+            { x: 50, z: -50, type: 'tank' },     // 远·东北（守好货）
+            { x: -45, z: -55, type: 'tank' },    // 远·西北
         ];
-        spots.forEach(s => this._addMonster(s.x, s.z));
+        spots.forEach(s => this._addMonster(s.x, s.z, s.type));
     }
 
-    _addMonster(x, z) {
+    _addMonster(x, z, type = 'normal') {
+        const cfg = MONSTER_TYPES[type] || MONSTER_TYPES.normal;
         const group = new THREE.Group();
-        // 紫色幽灵蛋身体
-        const r = 0.4;
+        const r = cfg.r;
+        const isMimic = type === 'mimic';
+        // 身体：幽灵类用半透明蛋身；咬人箱用不透明木色蛋身（像箱子站起来）
         const bodyGeo = new THREE.SphereGeometry(r, 20, 16);
         bodyGeo.scale(1, 1.2, 1);
         bodyGeo.translate(0, r * 1.2, 0);
         const body = new THREE.Mesh(
             bodyGeo,
-            new THREE.MeshToonMaterial({ color: 0x8050a0, transparent: true, opacity: 0.92 })
+            new THREE.MeshToonMaterial({
+                color: cfg.color, transparent: !isMimic, opacity: isMimic ? 1 : 0.92,
+            })
         );
         body.castShadow = true;
         addOutline(body, 0.05);
@@ -3949,16 +4550,30 @@ export class Game3D {
             pupil.position.set(sx * r * 0.3, r * 1.55, -r * 0.92);
             group.add(pupil);
         }
-        // 尖牙（小白三角）
-        const fang = new THREE.Mesh(
-            new THREE.ConeGeometry(0.04, 0.10, 4),
-            new THREE.MeshBasicMaterial({ color: 0xffffff })
-        );
-        fang.position.set(0, r * 1.08, -r * 0.78);
-        fang.rotation.x = Math.PI;
-        group.add(fang);
+        // 牙：普通一颗小尖牙；咬人箱/大怪用一排锯齿（更凶）
+        const fangCount = (isMimic || type === 'tank') ? 5 : 1;
+        const fangMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        for (let f = 0; f < fangCount; f++) {
+            const fang = new THREE.Mesh(new THREE.ConeGeometry(r * 0.1, r * 0.26, 4), fangMat);
+            const off = fangCount === 1 ? 0 : (f / (fangCount - 1) - 0.5) * r * 1.1;
+            fang.position.set(off, r * 1.02, -r * 0.82);
+            fang.rotation.x = Math.PI;
+            group.add(fang);
+        }
+        // 快怪加一对小翅膀（视觉区分）
+        if (type === 'fast') {
+            const wingMat = new THREE.MeshToonMaterial({ color: 0xffd0dc, side: THREE.DoubleSide });
+            for (const sx of [-1, 1]) {
+                const wing = new THREE.Mesh(new THREE.CircleGeometry(r * 0.7, 8, 0, Math.PI), wingMat);
+                wing.position.set(sx * r * 0.9, r * 1.3, 0);
+                wing.rotation.y = sx * 0.6;
+                group.add(wing);
+                m_wing(group, wing);
+            }
+        }
+        function m_wing(g, w) { (g.userData.wings = g.userData.wings || []).push(w); }
 
-        // 头顶 HP bar（DOM-like 用 Sprite + canvas 动态更新）
+        // 头顶 HP bar
         const hpCv = document.createElement('canvas');
         hpCv.width = 80; hpCv.height = 12;
         const hpTex = new THREE.CanvasTexture(hpCv);
@@ -3966,24 +4581,28 @@ export class Game3D {
         const hpSprite = new THREE.Sprite(new THREE.SpriteMaterial({
             map: hpTex, depthWrite: false, transparent: true,
         }));
-        hpSprite.scale.set(1.2, 0.18, 1);
-        hpSprite.position.y = r * 2.5;
+        hpSprite.scale.set(1.0 + r, 0.18, 1);
+        hpSprite.position.y = r * 2.5 + 0.3;
         group.add(hpSprite);
 
         group.position.set(x, 0, z);
         this.scene.add(group);
         const m = {
-            group, body, hpSprite, hpCv, hpTex,
+            group, body, hpSprite, hpCv, hpTex, type,
             home: new THREE.Vector3(x, 0, z),
-            hp: 3, maxHp: 3,
+            hp: cfg.hp, maxHp: cfg.hp,
+            speed: cfg.speed, dmg: cfg.dmg, knock: cfg.knock, aggro: cfg.aggro, drop: cfg.drop,
+            wings: group.userData.wings || null,
             state: 'alive',
             respawnT: 0,
             attackCD: 0,
             phase: Math.random() * Math.PI * 2,
             hitFlash: 0,
+            temporary: isMimic,   // 咬人箱怪被打倒后不复活（它本是宝箱）
         };
         this._drawMonsterHP(m);
         this.monsters.push(m);
+        return m;
     }
 
     _drawMonsterHP(m) {
@@ -4004,10 +4623,13 @@ export class Game3D {
 
     _updateMonsters(dt) {
         if (!this.monsters) return;
+        // 室内 FPS 视角下头顶血条会糊在镜头上，藏起来
+        if (this._playerHPBar) this._playerHPBar.visible = !this.isInsideHouse;
         const t = performance.now() * 0.001;
         const p = this.player.position;
         for (const m of this.monsters) {
             if (m.state === 'ko') {
+                if (m.temporary) continue;  // 咬人箱怪不复活，等被清出列表
                 m.respawnT -= dt;
                 if (m.respawnT <= 0) {
                     m.state = 'alive';
@@ -4019,18 +4641,25 @@ export class Game3D {
                 }
                 continue;
             }
-            // 漂浮
-            m.group.position.y = 0.15 + Math.sin(t * 2 + m.phase) * 0.10;
-            // AI：玩家近 10m → 追
+            // 漂浮（大怪沉、快怪轻快）
+            const bobAmp = m.type === 'tank' ? 0.06 : (m.type === 'fast' ? 0.16 : 0.10);
+            const bobSpd = m.type === 'fast' ? 4 : 2;
+            m.group.position.y = 0.15 + Math.sin(t * bobSpd + m.phase) * bobAmp;
+            // 快怪扇翅
+            if (m.wings) {
+                const flap = Math.sin(t * 18 + m.phase) * 0.5;
+                m.wings.forEach((w, wi) => { w.rotation.y = (wi === 0 ? 1 : -1) * (0.6 + flap); });
+            }
+            // AI：玩家进 aggro 范围 → 追
             const dx = p.x - m.group.position.x;
             const dz = p.z - m.group.position.z;
             const dist = Math.hypot(dx, dz);
-            const SPEED = 3.5;
-            if (dist < 10 && dist > 0.6) {
+            const SPEED = m.speed;
+            if (dist < m.aggro && dist > 0.6) {
                 m.group.position.x += (dx / dist) * SPEED * dt;
                 m.group.position.z += (dz / dist) * SPEED * dt;
                 m.group.rotation.y = Math.atan2(dx, dz);
-            } else if (dist >= 10) {
+            } else if (dist >= m.aggro && !m.temporary) {
                 // 回家
                 const hx = m.home.x - m.group.position.x;
                 const hz = m.home.z - m.group.position.z;
@@ -4040,11 +4669,11 @@ export class Game3D {
                     m.group.position.z += (hz / hd) * SPEED * 0.5 * dt;
                 }
             }
-            // 攻击玩家：1.0m 内 1s 一次扣 1 血
+            // 攻击玩家：1.0m 内 1s 一次，按种类扣血
             m.attackCD -= dt;
-            if (dist < 1.0 && m.attackCD <= 0 && this._invincible <= 0) {
+            if (dist < 1.0 + m.r && m.attackCD <= 0 && this._invincible <= 0) {
                 m.attackCD = 1.0;
-                this._hurtPlayer(1, dx, dz);
+                this._hurtPlayer(m.dmg, dx, dz);
             }
             // 受击闪光
             if (m.hitFlash > 0) {
@@ -4052,6 +4681,15 @@ export class Game3D {
                 m.body.material.emissive = m.body.material.emissive || new THREE.Color();
                 m.body.material.emissive.setHex(m.hitFlash > 0 ? 0xff5050 : 0x000000);
             }
+        }
+        // 清理被打倒的临时怪（咬人箱怪）：从场景和列表移除
+        if (this._monsterReap) {
+            for (const m of this._monsterReap) {
+                this.scene.remove(m.group);
+                const idx = this.monsters.indexOf(m);
+                if (idx >= 0) this.monsters.splice(idx, 1);
+            }
+            this._monsterReap.length = 0;
         }
         if (this._attackCooldown > 0) this._attackCooldown -= dt;
         if (this._invincible > 0) this._invincible -= dt;
@@ -4087,6 +4725,17 @@ export class Game3D {
         this._launchFirework();
         this._tone(1320, 0.2, 'sine', 0.07);
         this._unlockAchievement('first_ko');
+        // 掉落奖励（咬人箱怪打倒给宝石，回报冒险风险）
+        if (m.drop > 0) {
+            this.carriedValue = Math.max(0, this.carriedValue + m.drop);
+            this._renderTreasureChip();
+            this._showEasterBadge(`💎 打倒咬人箱！+${m.drop.toLocaleString()}`);
+            this._tone(1000, 0.18, 'sine', 0.07, 0.1);
+        }
+        // 临时怪（咬人箱怪）标记回收，不复活
+        if (m.temporary) {
+            (this._monsterReap = this._monsterReap || []).push(m);
+        }
     }
 
     _hurtPlayer(dmg, fromDx, fromDz) {
@@ -4130,11 +4779,49 @@ export class Game3D {
         this._tone(80, 1.0, 'sawtooth', 0.10);
     }
 
+    // 玩家头顶血条（怪物同款，战斗时一眼看清自己血量）
+    _buildPlayerHPBar() {
+        const cv = document.createElement('canvas');
+        cv.width = 100; cv.height = 16;
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, depthWrite: false, transparent: true, fog: false,
+        }));
+        sprite.scale.set(1.3, 0.21, 1);
+        sprite.position.y = 1.75;   // 蛋头顶之上
+        this.player.add(sprite);
+        this._playerHPBar = sprite;
+        this._playerHPCv = cv;
+        this._playerHPTex = tex;
+    }
+
     _renderPlayerHP() {
         if (!this._hpChip) this._hpChip = document.getElementById('game-hp');
-        if (!this._hpChip) return;
-        const heart = '❤️'.repeat(this.playerHP) + '🖤'.repeat(this.playerHPMax - this.playerHP);
-        this._hpChip.textContent = heart;
+        if (this._hpChip) {
+            const heart = '❤️'.repeat(this.playerHP) + '🖤'.repeat(this.playerHPMax - this.playerHP);
+            this._hpChip.textContent = heart;
+        }
+        // 头顶分段血条
+        if (this._playerHPCv) {
+            const ctx = this._playerHPCv.getContext('2d');
+            const W = 100, H = 16, n = this.playerHPMax;
+            ctx.clearRect(0, 0, W, H);
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0, 0, W, H, 5); ctx.fill(); }
+            else ctx.fillRect(0, 0, W, H);
+            const pad = 3, gap = 2;
+            const segW = (W - pad * 2 - gap * (n - 1)) / n;
+            const pct = this.playerHP / this.playerHPMax;
+            const col = pct > 0.6 ? '#66ee66' : (pct > 0.3 ? '#ffd23a' : '#ff5050');
+            for (let i = 0; i < n; i++) {
+                ctx.fillStyle = i < this.playerHP ? col : 'rgba(255,255,255,0.18)';
+                const x = pad + i * (segW + gap);
+                if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, pad, segW, H - pad * 2, 2); ctx.fill(); }
+                else ctx.fillRect(x, pad, segW, H - pad * 2);
+            }
+            this._playerHPTex.needsUpdate = true;
+        }
     }
 
     // ========= BGM（Web Audio 合成 ambient pad）=========
@@ -6237,19 +6924,23 @@ export class Game3D {
         // 雪区那侧的山换成雪山色（冷白蓝），跟雪原连成一片
         const snowHillMat = new THREE.MeshToonMaterial({ color: 0xdfe9f5 });
         const snowHillMatFar = new THREE.MeshToonMaterial({ color: 0xedf3fa });
-        for (let i = 0; i < 14; i++) {
-            const angle = (i / 14) * Math.PI * 2;
-            const radius = 90 + Math.random() * 15;
-            const size = 8 + Math.random() * 6;
+        // 沙漠那侧的山换成沙丘色（暖橙黄），跟沙漠连成一片
+        const duneMat = new THREE.MeshToonMaterial({ color: 0xe8c98c });
+        const duneMatFar = new THREE.MeshToonMaterial({ color: 0xf2dcab });
+        // 扩图后山环往外推（90→138）、数量 14→22 填满更大的地平线
+        for (let i = 0; i < 22; i++) {
+            const angle = (i / 22) * Math.PI * 2;
+            const radius = 132 + Math.random() * 16;
+            const size = 9 + Math.random() * 7;
             const cx = Math.cos(angle) * radius;
             const cz = Math.sin(angle) * radius;
-            const isSnowSide = cz < -55;
-            const hill = new THREE.Mesh(
-                new THREE.SphereGeometry(size, 10, 6),
-                Math.random() > 0.5
-                    ? (isSnowSide ? snowHillMat : hillMat)
-                    : (isSnowSide ? snowHillMatFar : hillMatFar)
-            );
+            const isSnowSide = cz < -70;
+            const isDuneSide = cz > 80;
+            const near = Math.random() > 0.5;
+            const mat = isSnowSide ? (near ? snowHillMat : snowHillMatFar)
+                : isDuneSide ? (near ? duneMat : duneMatFar)
+                : (near ? hillMat : hillMatFar);
+            const hill = new THREE.Mesh(new THREE.SphereGeometry(size, 10, 6), mat);
             hill.position.set(cx, -size * 0.4, cz);
             this.scene.add(hill);
             // 注册碰撞 AABB（略小于可视尺寸，蛋会在山脚被推回，不再融合进去）
@@ -6531,6 +7222,7 @@ export class Game3D {
         this._updateDayMotes(dt);
         this._updateLakeGlint(dt);
         this._updateSnowFX(dt);
+        this._updateDesertFX(dt);
         this._updateBunnies(dt);
         this._updateRipples(dt);
         this._updateLampposts();
@@ -6590,6 +7282,7 @@ export class Game3D {
                 performance.now() * 0.001;
         }
         if (!this.dying && !this.won) this._checkFlowerTouches(dt);
+        this._updateRegionFeel(dt);
         this._updateCamera();
 
         this.composer.render();
