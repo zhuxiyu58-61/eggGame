@@ -134,7 +134,7 @@ export class Minimap {
 
             // 1) 从玩家拉一条虚线指过去（"往这边走"）
             ctx.save();
-            ctx.strokeStyle = open ? 'rgba(102,221,255,0.85)' : 'rgba(102,221,255,0.5)';
+            ctx.strokeStyle = open ? 'rgba(176,124,255,0.9)' : 'rgba(176,124,255,0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([4, 3]);
             ctx.lineDashOffset = -t * 12;   // 流动感，更像"路线"
@@ -145,19 +145,19 @@ export class Minimap {
             // 2) 徽标位置：在范围内就画在原处，越界则贴到圆环边缘
             if (outOfRange) { tx = cx + ux * rimR; ty = cy + uy * rimR; }
             const pulse = open ? (1 + Math.sin(t * 6) * 0.25) : 1;
-            // 底色实心圆（在绿地上也跳出来）
-            ctx.fillStyle = open ? '#1aa6c8' : '#2a3d44';
-            ctx.strokeStyle = open ? '#aef2ff' : '#9fd6e4';
+            // 底色实心圆（魔法阵：紫色，在绿地上也跳出来）
+            ctx.fillStyle = open ? '#8a4fd0' : '#3a2d50';
+            ctx.strokeStyle = open ? '#e0c4ff' : '#b9a0d8';
             ctx.lineWidth = 2;
             ctx.beginPath(); ctx.arc(tx, ty, 7 * pulse, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-            // H 字
+            // 魔法符号
             ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 9px sans-serif';
+            ctx.font = 'bold 11px sans-serif';
             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText('H', tx, ty + 0.5);
+            ctx.fillText('✦', tx, ty + 0.5);
             // 开启时外圈脉动光环
             if (open) {
-                ctx.strokeStyle = `rgba(102,221,255,${0.6 - 0.4 * Math.sin(t * 6)})`;
+                ctx.strokeStyle = `rgba(176,124,255,${0.6 - 0.4 * Math.sin(t * 6)})`;
                 ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.arc(tx, ty, 11 + Math.sin(t * 6) * 2, 0, Math.PI * 2); ctx.stroke();
             }
@@ -166,7 +166,7 @@ export class Minimap {
                 ctx.save();
                 ctx.translate(tx + ux * 9, ty + uy * 9);
                 ctx.rotate(Math.atan2(uy, ux));
-                ctx.fillStyle = open ? '#66ddff' : '#9fd6e4';
+                ctx.fillStyle = open ? '#b07cff' : '#b9a0d8';
                 ctx.beginPath();
                 ctx.moveTo(4, 0); ctx.lineTo(-3, 3); ctx.lineTo(-3, -3); ctx.closePath();
                 ctx.fill();
