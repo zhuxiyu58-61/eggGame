@@ -847,11 +847,11 @@ export class Game3D {
             { x: -55, z:  35, body: 0xfcd7c0, roof: 0xb8743a, sign: '紫薇家' },
             { x: 35,  z: -52, body: 0xe6f0c8, roof: 0x6caa6c, sign: '小黄家' },
         ];
-        cfgs.forEach(c => this._addHouse(c.x, c.z, c.body, c.roof, c.sign));
+        cfgs.forEach((c, i) => this._addHouse(c.x, c.z, c.body, c.roof, c.sign, i));
         this._buildVillageHall();
     }
 
-    _addHouse(x, z, bodyColor, roofColor, signText) {
+    _addHouse(x, z, bodyColor, roofColor, signText, idx = 0) {
         const group = new THREE.Group();
         const W = 8.0, H = 5.0, D = 8.0;  // 面积 30→64，2 倍多
         const wallT = 0.25;
@@ -1081,6 +1081,9 @@ export class Game3D {
         rug.position.set(0, 0.07, 0);
         group.add(rug);
 
+        // ===== 屋外生活化装饰（每间按 idx 差异化）=====
+        this._addHouseLife(group, W, H, D, doorW, doorH, idx);
+
         group.position.set(x, 0, z);
         this.scene.add(group);
 
@@ -1105,6 +1108,108 @@ export class Game3D {
             currentOpacity: 1,
             lamp: this._lastHouseLamp,   // 夜里进屋自动开的灯
         });
+    }
+
+    // 屋外生活化装饰：门口地垫/盆栽/挂灯 + 窗台花箱 + 柴火堆或水桶 + 屋檐小彩旗
+    _addHouseLife(group, W, H, D, doorW, doorH, idx) {
+        const pal = [
+            { fl: [0xff6f8f, 0xffd24a, 0xff9e3d], bn: [0xff6f8f, 0x6fc7ff, 0xffd24a] },
+            { fl: [0x6fb3ff, 0xc77bff, 0xffffff], bn: [0x9ed8ff, 0xffd24a, 0xff8fb8] },
+            { fl: [0xff8fb8, 0xff6f5a, 0xffd24a], bn: [0xff6f5a, 0x86c074, 0xffd24a] },
+            { fl: [0xffd24a, 0xff9e3d, 0x86c074], bn: [0x86c074, 0xffd24a, 0x6fc7ff] },
+        ][idx % 4];
+        const wood = new THREE.MeshToonMaterial({ color: 0x8a5a32 });
+        const leaf = new THREE.MeshToonMaterial({ color: 0x5aa84f });
+        const terra = new THREE.MeshToonMaterial({ color: 0xc06a40 });
+        const flowerMesh = (c, r = 0.09) =>
+            new THREE.Mesh(new THREE.SphereGeometry(r, 6, 5), new THREE.MeshToonMaterial({ color: c }));
+
+        // 门口地垫
+        const matEl = new THREE.Mesh(
+            new THREE.BoxGeometry(1.7, 0.05, 0.95),
+            new THREE.MeshToonMaterial({ color: idx % 2 ? 0xb8794a : 0x9c7d52 })
+        );
+        matEl.position.set(0, 0.06, D / 2 + 0.9);
+        group.add(matEl);
+
+        // 门口两侧盆栽（陶盆 + 绿叶 + 几朵花）
+        for (const sx of [-1, 1]) {
+            const px = sx * (doorW / 2 + 0.6), pz = D / 2 + 0.35;
+            const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.22, 0.46, 10), terra);
+            pot.position.set(px, 0.23, pz);
+            pot.castShadow = true; addOutline(pot, 0.02);
+            group.add(pot);
+            const bush = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), leaf);
+            bush.position.set(px, 0.62, pz); bush.scale.y = 0.9;
+            group.add(bush);
+            for (let k = 0; k < 3; k++) {
+                const a = (k / 3) * Math.PI * 2 + idx;
+                const f = flowerMesh(pal.fl[k % 3]);
+                f.position.set(px + Math.cos(a) * 0.24, 0.74 + (k % 2) * 0.06, pz + Math.sin(a) * 0.24);
+                group.add(f);
+            }
+        }
+
+        // 门边挂灯（夜里 bloom 会发光）
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.06, 0.06), wood);
+        arm.position.set(doorW / 2 + 0.35, doorH - 0.1, D / 2 + 0.1);
+        group.add(arm);
+        const lantern = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.13, 0.16, 0.34, 8),
+            new THREE.MeshStandardMaterial({ color: 0xffe7a8, emissive: 0xffcf6a, emissiveIntensity: 0.9 })
+        );
+        lantern.position.set(doorW / 2 + 0.55, doorH - 0.35, D / 2 + 0.1);
+        group.add(lantern);
+
+        // 两扇侧窗下的窗台花箱
+        for (const sx of [-1, 1]) {
+            const bx = sx * (W / 2 + 0.06);
+            const box = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 1.0), wood);
+            box.position.set(bx, H * 0.45 - 0.5, 0);
+            group.add(box);
+            for (let k = 0; k < 3; k++) {
+                const f = flowerMesh(pal.fl[(k + idx) % 3], 0.1);
+                f.position.set(bx, H * 0.45 - 0.32, -0.32 + k * 0.32);
+                group.add(f);
+            }
+        }
+
+        // 左后墙外：柴火堆（偶数房）/ 右后角：水桶（奇数房）
+        if (idx % 2 === 0) {
+            for (let r = 0; r < 3; r++) for (let c = 0; c < 3 - r; c++) {
+                const log = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 1.3, 8), wood);
+                log.rotation.x = Math.PI / 2;
+                log.position.set(-W / 2 - 0.45, 0.16 + r * 0.27, -D / 4 + c * 0.3 + r * 0.15);
+                group.add(log);
+            }
+        } else {
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.36, 0.85, 12), wood);
+            barrel.position.set(W / 2 + 0.55, 0.42, -D / 2 + 0.8);
+            barrel.castShadow = true; addOutline(barrel, 0.02);
+            group.add(barrel);
+            const hoopMat = new THREE.MeshToonMaterial({ color: 0x55504a });
+            for (const hy of [0.16, 0.68]) {
+                const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.03, 6, 16), hoopMat);
+                hoop.rotation.x = Math.PI / 2;
+                hoop.position.set(W / 2 + 0.55, hy, -D / 2 + 0.8);
+                group.add(hoop);
+            }
+        }
+
+        // 屋檐下一串小彩旗（中间下垂）
+        const segs = 9;
+        for (let s = 0; s < segs; s++) {
+            const tt = s / (segs - 1);
+            const tx = -W / 2 + 0.4 + (W - 0.8) * tt;
+            const sag = Math.sin(tt * Math.PI) * 0.5;
+            const flag = new THREE.Mesh(
+                new THREE.ConeGeometry(0.13, 0.32, 3),
+                new THREE.MeshToonMaterial({ color: pal.bn[s % 3], side: THREE.DoubleSide })
+            );
+            flag.rotation.x = Math.PI;  // 尖朝下
+            flag.position.set(tx, H + 0.35 - sag, D / 2 + 0.12);
+            group.add(flag);
+        }
     }
 
     _updateHouseTransparency(dt) {
