@@ -5204,6 +5204,7 @@ export class Game3D {
         this.scene.add(group);
         const m = {
             group, body, hpSprite, hpCv, hpTex, type,
+            r: cfg.r,   // ← 攻击判定 dist<1.0+m.r 要用；之前漏存导致 m.r=undefined→怪从不攻击
             home: new THREE.Vector3(x, 0, z),
             hp: cfg.hp, maxHp: cfg.hp,
             speed: cfg.speed, dmg: cfg.dmg, knock: cfg.knock, aggro: cfg.aggro, drop: cfg.drop,
