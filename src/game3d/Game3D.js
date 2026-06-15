@@ -5322,25 +5322,83 @@ export class Game3D {
 
     _doMeleeAttack() {
         if (this._attackCooldown > 0) return;
-        this._attackCooldown = 0.6;
+        this._attackCooldown = 0.55;
+        this._spawnSwingFx();                       // 每次按 J 都有挥击弧光，能看见攻击发生
+        this._tone(680, 0.07, 'square', 0.05);
         const p = this.player.position;
         let hit = false;
         for (const m of this.monsters) {
             if (m.state !== 'alive') continue;
-            const dx = p.x - m.group.position.x;
-            const dz = p.z - m.group.position.z;
-            if (Math.hypot(dx, dz) < 1.5) {
+            const dx = m.group.position.x - p.x;
+            const dz = m.group.position.z - p.z;
+            const d = Math.hypot(dx, dz);
+            if (d < 2.2) {                          // 范围 1.5→2.2，更容易够到
                 m.hp -= 1;
-                m.hitFlash = 0.2;
+                m.hitFlash = 0.35;
                 this._drawMonsterHP(m);
-                this._tone(900, 0.1, 'square', 0.06);
-                if (m.hp <= 0) {
-                    this._koMonster(m);
-                }
+                // 把怪打退（"驱赶"手感）+ 短暂不还手
+                const nx = dx / (d || 1), nz = dz / (d || 1);
+                m.group.position.x += nx * 1.5;
+                m.group.position.z += nz * 1.5;
+                m.attackCD = Math.max(m.attackCD, 0.5);
+                this._spawnHitNumber(m.group.position);
+                this._tone(900, 0.1, 'square', 0.07);
+                this._tone(1300, 0.08, 'square', 0.04, 0.04);
+                if (m.hp <= 0) this._koMonster(m);
                 hit = true;
             }
         }
-        if (!hit) this._tone(200, 0.08, 'sine', 0.03); // 空挥
+        if (!hit) this._tone(220, 0.07, 'sine', 0.03); // 空挥
+    }
+
+    // 挥击弧光（按 J 即播，朝镜头前方）
+    _spawnSwingFx() {
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.55, 1.0, 24, 1, Math.PI * 0.15, Math.PI * 1.2),
+            new THREE.MeshBasicMaterial({
+                color: 0xffffff, transparent: true, opacity: 0.9,
+                side: THREE.DoubleSide, depthWrite: false, fog: false,
+            })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.rotation.z = -(this.cameraYaw || 0);
+        ring.position.copy(this.player.position); ring.position.y = 0.5;
+        this.scene.add(ring);
+        (this._meleeFx = this._meleeFx || []).push({ mesh: ring, life: 0.22, full: 0.22 });
+    }
+
+    _updateMeleeFx(dt) {
+        if (!this._meleeFx || !this._meleeFx.length) return;
+        this._meleeFx = this._meleeFx.filter(f => {
+            f.life -= dt;
+            if (f.life <= 0) {
+                this.scene.remove(f.mesh); f.mesh.geometry.dispose(); f.mesh.material.dispose();
+                return false;
+            }
+            const k = 1 - f.life / f.full;
+            f.mesh.scale.setScalar(1 + k * 1.6);
+            f.mesh.material.opacity = 0.9 * (1 - k);
+            f.mesh.position.x = this.player.position.x;
+            f.mesh.position.z = this.player.position.z;
+            return true;
+        });
+    }
+
+    // 打中怪：怪头顶飘黄色 "-1"（复用伤害数字的上飘淡出）
+    _spawnHitNumber(pos) {
+        const cv = document.createElement('canvas'); cv.width = 96; cv.height = 64;
+        const ctx = cv.getContext('2d');
+        ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 7; ctx.strokeStyle = '#6a4a00'; ctx.strokeText('-1', 48, 34);
+        ctx.fillStyle = '#ffe24a'; ctx.fillText('-1', 48, 34);
+        const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false, depthTest: false, fog: false,
+        }));
+        sp.scale.set(0.95, 0.63, 1);
+        sp.position.set(pos.x + (Math.random() - 0.5) * 0.5, pos.y + 1.2, pos.z);
+        this.scene.add(sp);
+        (this._dmgNumbers = this._dmgNumbers || []).push({ sp, life: 0.8 });
     }
 
     _koMonster(m) {
@@ -8317,6 +8375,7 @@ export class Game3D {
         this._updatePlayerAnimation(dt);
         this._updateHurtFlash(dt);
         this._updateDamageNumbers(dt);
+        this._updateMeleeFx(dt);
         this._updateButterflies();
         this._updateSkyClouds(dt);
         this._updateBirdFlock(dt);
