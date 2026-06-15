@@ -5374,13 +5374,34 @@ export class Game3D {
         this.playerVy = 3;
         this.onGround = false;
         // 蛋身闪红（旧代码作用在 player.children 的 Group 上无效，改为整只蛋的网格 emissive）
-        this._hurtFlashT = 0.3;
-        // 一眼能懂的受击反馈：全屏红光晕 + 头顶飘 "-N"
+        this._hurtFlashT = 0.45;
+        // 一眼能懂的受击反馈：全屏红光 + 屏幕震动 + 头顶飘 "-N" + HUD 爱心闪
         this._flashDamageScreen();
+        this._screenShake();
         this._spawnDamageNumber(dmg);
+        if (this._hpChip) {
+            this._hpChip.animate(
+                [{ transform: 'scale(1.6)', filter: 'brightness(2.2)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
+                { duration: 450, easing: 'ease-out' }
+            );
+        }
         this._tone(150, 0.2, 'sawtooth', 0.09);
         this._tone(90, 0.25, 'square', 0.06, 0.05);
         if (this.playerHP <= 0) this._playerDown();
+    }
+
+    // 屏幕震动（抖一下画布，最直观的"挨打了"反馈）
+    _screenShake() {
+        const el = this.renderer && this.renderer.domElement;
+        if (!el) return;
+        el.animate([
+            { transform: 'translate(0,0)' },
+            { transform: 'translate(-10px, 6px)' },
+            { transform: 'translate(8px, -6px)' },
+            { transform: 'translate(-6px, -5px)' },
+            { transform: 'translate(5px, 4px)' },
+            { transform: 'translate(0,0)' },
+        ], { duration: 320, easing: 'ease-out' });
     }
 
     // 受击视觉：蛋身闪红 + 头顶血条脉动（每帧调用）
@@ -5393,7 +5414,7 @@ export class Game3D {
         }
         if (this._hurtFlashT > 0) {
             this._hurtFlashT = Math.max(0, this._hurtFlashT - dt);
-            const k = this._hurtFlashT / 0.3;
+            const k = this._hurtFlashT / 0.45;
             this._playerHurtMeshes.forEach(m => m.material.emissive.setRGB(0.95 * k, 0, 0));
         }
         if (this._hpBarFlash > 0 && this._playerHPBar) {
@@ -5403,40 +5424,38 @@ export class Game3D {
         }
     }
 
-    // 全屏红光晕（DOM 覆盖层，受伤一闪）
+    // 全屏红光（DOM 覆盖层）。用 Web Animations API 一发即播，比 CSS 过渡重排技巧可靠
     _flashDamageScreen() {
         if (!this._dmgOverlay) {
             const d = document.createElement('div');
-            d.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:46;opacity:0;' +
-                'background:radial-gradient(ellipse at center, rgba(210,0,0,0) 45%, rgba(210,0,0,0.6) 100%);';
+            d.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:99999;opacity:0;' +
+                'background:radial-gradient(ellipse at center, rgba(220,20,20,0.35) 0%, rgba(200,0,0,0.92) 100%);';
             document.body.appendChild(d);
             this._dmgOverlay = d;
         }
-        const d = this._dmgOverlay;
-        d.style.transition = 'none';
-        d.style.opacity = '1';
-        void d.offsetWidth;  // 强制重排，让下面的过渡从 1 开始
-        d.style.transition = 'opacity 0.45s ease-out';
-        d.style.opacity = '0';
+        this._dmgOverlay.animate(
+            [{ opacity: 1 }, { opacity: 0.85, offset: 0.15 }, { opacity: 0 }],
+            { duration: 600, easing: 'ease-out' }
+        );
     }
 
-    // 头顶飘 "-N" 伤害数字
+    // 头顶飘 "-N" 伤害数字（大号、描边、始终画在最前）
     _spawnDamageNumber(dmg) {
-        const cv = document.createElement('canvas'); cv.width = 128; cv.height = 72;
+        const cv = document.createElement('canvas'); cv.width = 160; cv.height = 96;
         const ctx = cv.getContext('2d');
-        ctx.font = 'bold 54px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.lineWidth = 7; ctx.strokeStyle = '#5a0000'; ctx.strokeText('-' + dmg, 64, 38);
-        ctx.fillStyle = '#ff5252'; ctx.fillText('-' + dmg, 64, 38);
+        ctx.font = 'bold 76px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 10; ctx.strokeStyle = '#4a0000'; ctx.strokeText('-' + dmg, 80, 50);
+        ctx.fillStyle = '#ff3b3b'; ctx.fillText('-' + dmg, 80, 50);
         const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
         const sp = new THREE.Sprite(new THREE.SpriteMaterial({
             map: tex, transparent: true, depthWrite: false, depthTest: false, fog: false,
         }));
-        sp.scale.set(1.0, 0.56, 1);
+        sp.scale.set(1.7, 1.02, 1);
         sp.position.copy(this.player.position);
-        sp.position.y += 1.5;
+        sp.position.y += 1.7;
         sp.position.x += (Math.random() - 0.5) * 0.4;
         this.scene.add(sp);
-        (this._dmgNumbers = this._dmgNumbers || []).push({ sp, life: 1.0 });
+        (this._dmgNumbers = this._dmgNumbers || []).push({ sp, life: 1.1 });
     }
 
     _updateDamageNumbers(dt) {
