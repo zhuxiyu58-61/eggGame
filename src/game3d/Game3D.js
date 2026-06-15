@@ -1746,15 +1746,22 @@ export class Game3D {
     _buildCollectibleStars() {
         this.collectStars = [];
         this.starsCollected = 0;
-        const inPath = (x, z) => {
-            if (Math.hypot(x, z) < 7) return false;  // 让广场也能撒
-            // 避开房子和障碍区域
-            return Math.abs(x) > 3 || Math.abs(z) > 3;
+        // 合法落点：避开广场中心、湖、房子内部（否则星星卡在墙里/湖里吸不到）
+        const valid = (x, z) => {
+            if (Math.hypot(x, z) < 6) return false;
+            if (Math.hypot(x - 48, z + 42) < 12) return false;   // 湖
+            for (const h of (this.houses || [])) {
+                if (x > h.min.x - 1 && x < h.max.x + 1 && z > h.min.z - 1 && z < h.max.z + 1) return false;
+            }
+            return true;
         };
         for (let i = 0; i < 24; i++) {
-            const x = (Math.random() - 0.5) * 100;
-            const z = (Math.random() - 0.5) * 100;
-            // 注：碰撞简单避一下中心区
+            let x, z, tries = 0;
+            do {
+                x = (Math.random() - 0.5) * 100;
+                z = (Math.random() - 0.5) * 100;
+                tries++;
+            } while (!valid(x, z) && tries < 30);
             this._addCollectStar(x, z);
         }
         this._starsChip = document.getElementById('game-stars');
@@ -2697,6 +2704,7 @@ export class Game3D {
     }
 
     _launchFirework() {
+        if (this._destroyed) return;
         this._unlockAchievement('see_firework');
         this._fireworkCount = (this._fireworkCount || 0) + 1;
         if (this._fireworkCount >= 5) this._unlockAchievement('firework_lover');
@@ -4012,9 +4020,10 @@ export class Game3D {
         }
         if (!inLake && this.swimming) {
             this.swimming = false;
-            // 上岸恢复颜色
-            if (this.bodyMesh && !this._bodyColorWasWet) {
-                this.bodyMesh.material.color.setHex(this._bodyColorDry);
+            // 上岸恢复颜色：下雨天恢复成雨天湿色，否则干色（别把雨天湿色覆盖丢了）
+            if (this.bodyMesh) {
+                const raining = this.weather === 'rain';
+                this.bodyMesh.material.color.setHex(raining ? this._bodyColorWet : this._bodyColorDry);
             }
         }
 
@@ -6217,6 +6226,7 @@ export class Game3D {
     }
 
     _showEasterBadge(text) {
+        if (this._destroyed) return;
         // 屏幕中央短暂弹一行金色文字
         if (!this._easterEl) {
             this._easterEl = document.createElement('div');
@@ -8231,8 +8241,9 @@ export class Game3D {
         this.playerVy -= GRAVITY * dt;
         this.player.position.y += this.playerVy * dt;
 
-        if (this.player.position.y <= PLAYER_RADIUS) {
-            this.player.position.y = PLAYER_RADIUS;
+        const groundY = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时落地高度同步，别陷地
+        if (this.player.position.y <= groundY) {
+            this.player.position.y = groundY;
             this.playerVy = 0;
             this.onGround = true;
         }
@@ -8240,8 +8251,9 @@ export class Game3D {
 
     _resolveObstacleCollisions() {
         let landedOnTop = false;
+        const pr = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时碰撞半径同步放大，别穿墙
         for (const obs of this.obstacles) {
-            const hit = sphereVsAABB(this.player.position, PLAYER_RADIUS, obs.min, obs.max);
+            const hit = sphereVsAABB(this.player.position, pr, obs.min, obs.max);
             if (hit) {
                 this.player.position.x += hit.nx * hit.depth;
                 this.player.position.y += hit.ny * hit.depth;
@@ -8501,6 +8513,7 @@ export class Game3D {
     }
 
     destroy() {
+        this._destroyed = true;
         cancelAnimationFrame(this.animId);
         window.removeEventListener('keydown', this._onKeyDown);
         window.removeEventListener('keyup', this._onKeyUp);
@@ -8508,6 +8521,10 @@ export class Game3D {
         document.removeEventListener('pointerlockchange', this._onPointerLockChange);
         document.removeEventListener('mousemove', this._onMouseMove);
         if (document.pointerLockElement) document.exitPointerLock?.();
+        // 清掉自建的 DOM 浮层 + 待触发定时器，避免重开后叠屏 / 野回调访问已销毁实例
+        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay]
+            .forEach(el => el && el.remove());
+        [this._easterTimer, this._feelTimer].forEach(t => clearTimeout(t));
         this.scene.traverse(obj => {
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) {
