@@ -8154,6 +8154,118 @@ export class Game3D {
         this._onKeyUp = (e) => { this.keys[e.code] = false; };
         window.addEventListener('keydown', this._onKeyDown);
         window.addEventListener('keyup', this._onKeyUp);
+
+        // ===== 触屏控制（仅触屏设备显示）=====
+        this.touchMove = { x: 0, y: 0 };
+        this._setupTouchControls();
+    }
+
+    _setupTouchControls() {
+        const isTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+        if (!isTouch) return;
+
+        const ui = document.createElement('div');
+        Object.assign(ui.style, {
+            position: 'fixed', inset: '0', zIndex: '12',
+            touchAction: 'none', userSelect: 'none',
+        });
+        document.body.appendChild(ui);
+        this._touchUI = ui;
+
+        // 左下虚拟摇杆（按下才出现）
+        const base = document.createElement('div');
+        Object.assign(base.style, {
+            position: 'fixed', width: '130px', height: '130px', borderRadius: '50%',
+            background: 'rgba(255,255,255,0.18)', border: '2px solid rgba(255,255,255,0.4)',
+            display: 'none', zIndex: '12', pointerEvents: 'none',
+        });
+        const knob = document.createElement('div');
+        Object.assign(knob.style, {
+            position: 'absolute', left: '40px', top: '40px', width: '50px', height: '50px',
+            borderRadius: '50%', background: 'rgba(255,255,255,0.55)', pointerEvents: 'none',
+        });
+        base.appendChild(knob);
+        ui.appendChild(base);
+
+        // 右下动作按钮
+        const mkBtn = (label, bottom, color, onDown, onUp) => {
+            const btn = document.createElement('div');
+            Object.assign(btn.style, {
+                position: 'fixed', right: '24px', bottom: bottom + 'px',
+                width: '74px', height: '74px', borderRadius: '50%',
+                background: color, color: '#fff', fontSize: '15px', fontWeight: 'bold',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)', zIndex: '13', textAlign: 'center',
+            });
+            btn.textContent = label;
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                this._ensureAudio();
+                btn.style.transform = 'scale(0.92)';
+                onDown && onDown();
+            }, { passive: false });
+            const up = (e) => { e.stopPropagation(); btn.style.transform = ''; onUp && onUp(); };
+            btn.addEventListener('touchend', up);
+            btn.addEventListener('touchcancel', up);
+            ui.appendChild(btn);
+            return btn;
+        };
+        mkBtn('⤴︎\n跳', 200, 'rgba(120,200,120,0.85)',
+            () => { this.keys['Space'] = true; }, () => { this.keys['Space'] = false; });
+        mkBtn('👊\n打', 290, 'rgba(230,140,120,0.85)', () => this._doMeleeAttack());
+        mkBtn('💧\n浇花', 110, 'rgba(120,180,230,0.85)', () => this._doWatering());
+        mkBtn('🎣\n钓鱼', 20, 'rgba(180,150,230,0.85)', () => this._toggleFishing());
+
+        // 多点触控：左半屏=摇杆，右半屏=转视角
+        let joyId = null, joyCx = 0, joyCy = 0, camId = null, camLX = 0, camLY = 0;
+        const R = 55;
+        ui.addEventListener('touchstart', (e) => {
+            this._ensureAudio();
+            for (const t of e.changedTouches) {
+                if (t.clientX < window.innerWidth * 0.45 && joyId === null) {
+                    joyId = t.identifier; joyCx = t.clientX; joyCy = t.clientY;
+                    base.style.left = (joyCx - 65) + 'px';
+                    base.style.top = (joyCy - 65) + 'px';
+                    base.style.display = 'block';
+                } else if (camId === null) {
+                    camId = t.identifier; camLX = t.clientX; camLY = t.clientY;
+                }
+            }
+        }, { passive: false });
+        ui.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyId) {
+                    let dx = t.clientX - joyCx, dy = t.clientY - joyCy;
+                    const len = Math.hypot(dx, dy);
+                    if (len > R) { dx = dx / len * R; dy = dy / len * R; }
+                    knob.style.transform = `translate(${dx}px,${dy}px)`;
+                    this.touchMove.x = dx / R;
+                    this.touchMove.y = -dy / R;   // 屏幕往下 = 后退
+                } else if (t.identifier === camId) {
+                    const sens = 0.005;
+                    this.cameraYaw += (t.clientX - camLX) * sens;
+                    this.cameraPitch -= (t.clientY - camLY) * sens;
+                    const lim = Math.PI / 2 - 0.1;
+                    this.cameraPitch = Math.max(-lim, Math.min(lim, this.cameraPitch));
+                    camLX = t.clientX; camLY = t.clientY;
+                }
+            }
+        }, { passive: false });
+        const endTouch = (e) => {
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyId) {
+                    joyId = null; this.touchMove.x = 0; this.touchMove.y = 0;
+                    base.style.display = 'none'; knob.style.transform = '';
+                }
+                if (t.identifier === camId) camId = null;
+            }
+        };
+        ui.addEventListener('touchend', endTouch);
+        ui.addEventListener('touchcancel', endTouch);
+
+        // 触屏不需要"点屏幕锁鼠标"，更新提示
+        if (this.hintEl) this.hintEl.textContent = '左下摇杆走 · 右半屏拖动看 · 右下按钮跳/打/浇花/钓鱼';
     }
 
     _setupStatusUI() {
@@ -8292,6 +8404,10 @@ export class Game3D {
         if (this.keys['KeyS'] || this.keys['ArrowDown']) iz -= 1;
         if (this.keys['KeyA'] || this.keys['ArrowLeft']) ix -= 1;
         if (this.keys['KeyD'] || this.keys['ArrowRight']) ix += 1;
+        // 触屏虚拟摇杆
+        if (this.touchMove && (this.touchMove.x || this.touchMove.y)) {
+            ix += this.touchMove.x; iz += this.touchMove.y;
+        }
         const mag = Math.hypot(ix, iz);
         if (mag > 0) { ix /= mag; iz /= mag; }
 
@@ -8614,7 +8730,7 @@ export class Game3D {
         document.removeEventListener('mousemove', this._onMouseMove);
         if (document.pointerLockElement) document.exitPointerLock?.();
         // 清掉自建的 DOM 浮层 + 待触发定时器，避免重开后叠屏 / 野回调访问已销毁实例
-        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl]
+        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl, this._touchUI]
             .forEach(el => el && el.remove());
         [this._easterTimer, this._feelTimer].forEach(t => clearTimeout(t));
         this.scene.traverse(obj => {
