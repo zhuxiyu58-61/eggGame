@@ -499,7 +499,7 @@ export class Game3D {
     _initThree() {
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));  // Retina 屏限到 1.5，省 2-4 倍片元
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -556,6 +556,9 @@ export class Game3D {
         this.sun.shadow.camera.near = 1;
         this.sun.shadow.camera.far = 100;
         this.sun.shadow.bias = -0.0005;
+        // 阴影贴图不每帧重渲，隔几帧刷一次（太阳移动慢、卡通游戏看不出延迟），省一大笔
+        this.sun.shadow.autoUpdate = false;
+        this.sun.shadow.needsUpdate = true;
         this.scene.add(this.sun);
         // 反光（蓝天→草地）
         this.hemi = new THREE.HemisphereLight(0xbde0ff, 0x5a8a3a, 0.35);
@@ -6674,6 +6677,17 @@ export class Game3D {
         lake.position.set(x, 0.06, z);
         this.scene.add(lake);
         this.lake = lake;
+        // 远处兜底：便宜的静态水面，离湖远时顶替 Reflector（Reflector 每帧把整个场景重渲一遍）
+        const lakeFallback = new THREE.Mesh(
+            new THREE.CircleGeometry(radius, 48),
+            new THREE.MeshToonMaterial({ color: 0x5b86a8 })
+        );
+        lakeFallback.rotation.x = -Math.PI / 2;
+        lakeFallback.position.set(x, 0.055, z);
+        lakeFallback.visible = false;
+        this.scene.add(lakeFallback);
+        this._lakeFallback = lakeFallback;
+        this._lakeCenter = new THREE.Vector3(x, 0, z);
 
         // 湖边深色环（暗示岸）
         const rim = new THREE.Mesh(
@@ -8255,6 +8269,17 @@ export class Game3D {
         if (!this.dying && !this.won) this._checkFlowerTouches(dt);
         this._updateRegionFeel(dt);
         this._updateCamera();
+
+        // 湖面 LOD：离湖远了换静态水面，关掉每帧重渲整场景的 Reflector
+        if (this.lake && this._lakeFallback) {
+            const near = this.player.position.distanceTo(this._lakeCenter) < 45;
+            this.lake.visible = near;
+            this._lakeFallback.visible = !near;
+        }
+
+        // 阴影每 3 帧刷一次（autoUpdate 已关）
+        this._shadowTick = ((this._shadowTick || 0) + 1) % 3;
+        if (this._shadowTick === 0) this.sun.shadow.needsUpdate = true;
 
         this.composer.render();
         this.animId = requestAnimationFrame(this._tick);
