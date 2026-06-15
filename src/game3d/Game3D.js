@@ -7861,10 +7861,10 @@ export class Game3D {
             cap.rotation.y = cone.rotation.y;
             this.scene.add(cap);
         }
-        const r = rBase * 0.7;
+        const r = rBase * 0.92;   // 贴合山体底盘，蛋停在山脚而不是陷进去（旧 0.7 会走进裙边约 30%）
         this.obstacles.push({
             min: new THREE.Vector3(cx - r, 0, cz - r),
-            max: new THREE.Vector3(cx + r, h * 0.6, cz + r),
+            max: new THREE.Vector3(cx + r, h * 0.8, cz + r),
         });
     }
 
