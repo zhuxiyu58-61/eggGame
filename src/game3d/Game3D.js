@@ -799,6 +799,7 @@ export class Game3D {
         this._addRooftopCat();
         this._buildSnowBiome();
         this._buildDesertBiome();
+        this._blendBiomeEdges();
         this._buildSnowSprite();
         this._buildLakeTurtle();
         this._buildFishingBoat();
@@ -7432,6 +7433,56 @@ export class Game3D {
             min: new THREE.Vector3(cx - r, 0, cz - r),
             max: new THREE.Vector3(cx + r, size * 0.32, cz + r),
         });
+    }
+
+    // 区域接缝羽化：让雪地↔草地、沙地↔草地交错咬合，不再是一刀切的硬边
+    _blendBiomeEdges() {
+        // 地面贴片（扁圆斑）——撒在接缝两侧，离缝越远越稀（random*random 偏向 0）
+        const addPatch = (mat, x, z, rad) => {
+            const patch = new THREE.Mesh(new THREE.CircleGeometry(rad, 12), mat);
+            patch.rotation.x = -Math.PI / 2;
+            patch.rotation.z = Math.random() * Math.PI;
+            patch.scale.set(1, 0.7 + Math.random() * 0.6, 1);
+            patch.position.set(x, 0.045 + Math.random() * 0.01, z);
+            patch.receiveShadow = true;
+            this.scene.add(patch);
+        };
+        // 草地里冒出的小堆（扁球）——草丛/枯草，戳进对面地貌
+        const addTuft = (mat, x, z, rad) => {
+            const tuft = new THREE.Mesh(new THREE.SphereGeometry(rad, 8, 6), mat);
+            tuft.scale.set(1, 0.5, 1);
+            tuft.position.set(x, 0.08, z);
+            this.scene.add(tuft);
+        };
+
+        const snowMat = new THREE.MeshToonMaterial({ color: 0xeef4fb });
+        const grassMat = new THREE.MeshToonMaterial({ color: 0x6cae5a });
+        const sandMat = new THREE.MeshToonMaterial({ color: 0xe7cd96 });
+        const dryMat = new THREE.MeshToonMaterial({ color: 0xc3ad62 });
+
+        // —— 雪地↔草地 接缝（雪原南缘约 z=-55）——
+        for (let i = 0; i < 46; i++) {                       // 草地上的雪斑：往南渐疏
+            const x = (Math.random() - 0.5) * 152;
+            const z = -55 + Math.random() * Math.random() * 18;
+            addPatch(snowMat, x, z, 0.8 + Math.random() * 2.4);
+        }
+        for (let i = 0; i < 24; i++) {                       // 雪地里的草丛：往北渐疏
+            const x = (Math.random() - 0.5) * 150;
+            const z = -57 - Math.random() * Math.random() * 15;
+            addTuft(grassMat, x, z, 0.35 + Math.random() * 0.3);
+        }
+
+        // —— 沙地↔草地 接缝（沙漠北缘约 z=78）——
+        for (let i = 0; i < 46; i++) {                       // 草地上的沙斑：往北渐疏
+            const x = (Math.random() - 0.5) * 162;
+            const z = 78 - Math.random() * Math.random() * 18;
+            addPatch(sandMat, x, z, 0.8 + Math.random() * 2.4);
+        }
+        for (let i = 0; i < 22; i++) {                       // 沙地里的枯草丛：往南渐疏
+            const x = (Math.random() - 0.5) * 160;
+            const z = 80 + Math.random() * Math.random() * 15;
+            addTuft(dryMat, x, z, 0.3 + Math.random() * 0.3);
+        }
     }
 
     _buildPlayer() {
