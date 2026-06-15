@@ -7374,37 +7374,64 @@ export class Game3D {
     }
 
     _addDistantHills() {
-        const hillMat = new THREE.MeshToonMaterial({ color: 0x9d8acc });
-        const hillMatFar = new THREE.MeshToonMaterial({ color: 0xbaa6db });
-        // 雪区那侧的山换成雪山色（冷白蓝），跟雪原连成一片
-        const snowHillMat = new THREE.MeshToonMaterial({ color: 0xdfe9f5 });
-        const snowHillMatFar = new THREE.MeshToonMaterial({ color: 0xedf3fa });
-        // 沙漠那侧的山换成沙丘色（暖橙黄），跟沙漠连成一片
-        const duneMat = new THREE.MeshToonMaterial({ color: 0xe8c98c });
-        const duneMatFar = new THREE.MeshToonMaterial({ color: 0xf2dcab });
-        // 扩图后山环往外推（90→138）、数量 14→22 填满更大的地平线
+        // 一圈远景地貌：北雪山 / 东西绿林山 / 南沙丘，形状颜色都对得上各区，不再是看不懂的球
+        const snowRock = new THREE.MeshToonMaterial({ color: 0x9fb0c8 });
+        const snowCap  = new THREE.MeshToonMaterial({ color: 0xf3f8ff });
+        const green    = new THREE.MeshToonMaterial({ color: 0x6aa85a });
+        const greenFar = new THREE.MeshToonMaterial({ color: 0x86c074 });
+        const sand     = new THREE.MeshToonMaterial({ color: 0xe3c489 });
+        const sandFar  = new THREE.MeshToonMaterial({ color: 0xeed3a3 });
         for (let i = 0; i < 22; i++) {
             const angle = (i / 22) * Math.PI * 2;
             const radius = 132 + Math.random() * 16;
-            const size = 9 + Math.random() * 7;
+            const size = 10 + Math.random() * 8;
             const cx = Math.cos(angle) * radius;
             const cz = Math.sin(angle) * radius;
-            const isSnowSide = cz < -70;
-            const isDuneSide = cz > 80;
             const near = Math.random() > 0.5;
-            const mat = isSnowSide ? (near ? snowHillMat : snowHillMatFar)
-                : isDuneSide ? (near ? duneMat : duneMatFar)
-                : (near ? hillMat : hillMatFar);
-            const hill = new THREE.Mesh(new THREE.SphereGeometry(size, 10, 6), mat);
-            hill.position.set(cx, -size * 0.4, cz);
-            this.scene.add(hill);
-            // 注册碰撞 AABB（略小于可视尺寸，蛋会在山脚被推回，不再融合进去）
-            const r = size * 0.78;
-            this.obstacles.push({
-                min: new THREE.Vector3(cx - r, 0, cz - r),
-                max: new THREE.Vector3(cx + r, size * 0.6, cz + r),
-            });
+            if (cz < -70) {
+                this._addPeakMountain(cx, cz, size, snowRock, snowCap);   // ❄️ 雪山：岩锥 + 白雪顶
+            } else if (cz > 80) {
+                this._addSandDune(cx, cz, size, near ? sand : sandFar);   // 🏜️ 沙丘：低矮宽圆
+            } else {
+                this._addPeakMountain(cx, cz, size, near ? green : greenFar, null);  // 🌲 绿林山
+            }
         }
+    }
+
+    // 圆锥山峰（可选白雪顶）——清晰的"山"轮廓
+    _addPeakMountain(cx, cz, size, bodyMat, capMat) {
+        const h = size * 1.5, rBase = size * 0.95;
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(rBase, h, 7), bodyMat);
+        const yBase = -size * 0.15;                 // 山脚略陷进地里
+        cone.position.set(cx, yBase + h / 2, cz);
+        cone.rotation.y = Math.random() * Math.PI;
+        this.scene.add(cone);
+        if (capMat) {
+            const capH = h * 0.42;
+            const cap = new THREE.Mesh(new THREE.ConeGeometry(rBase * 0.5, capH, 7), capMat);
+            cap.position.set(cx, yBase + h - capH / 2, cz);
+            cap.rotation.y = cone.rotation.y;
+            this.scene.add(cap);
+        }
+        const r = rBase * 0.7;
+        this.obstacles.push({
+            min: new THREE.Vector3(cx - r, 0, cz - r),
+            max: new THREE.Vector3(cx + r, h * 0.6, cz + r),
+        });
+    }
+
+    // 沙丘：低矮、宽、圆滑的沙堆（明显比山矮平，一看就是沙丘不是山）
+    _addSandDune(cx, cz, size, mat) {
+        const dune = new THREE.Mesh(new THREE.SphereGeometry(size * 0.9, 14, 8), mat);
+        dune.scale.set(1.5, 0.4, 1.05);
+        dune.rotation.y = Math.random() * Math.PI;
+        dune.position.set(cx, -size * 0.08, cz);
+        this.scene.add(dune);
+        const r = size * 0.95;
+        this.obstacles.push({
+            min: new THREE.Vector3(cx - r, 0, cz - r),
+            max: new THREE.Vector3(cx + r, size * 0.32, cz + r),
+        });
     }
 
     _buildPlayer() {
