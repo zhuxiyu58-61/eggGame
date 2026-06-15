@@ -4129,6 +4129,37 @@ export class Game3D {
 
     // ========= 搜打撤撤离机制 + 宝箱盲盒 + 怪物 + 战斗 =========
 
+    // 魔法阵符文盘贴图（同心圆 + 符文 + 放射刻度，发光紫青）
+    _makeMagicCircleTexture() {
+        const c = document.createElement('canvas'); c.width = c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.clearRect(0, 0, 256, 256);
+        const cx = 128, cy = 128;
+        ctx.strokeStyle = '#b07cff'; ctx.lineWidth = 3;
+        for (const r of [118, 96, 60, 40]) { ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke(); }
+        // 内三角形 + 反三角形（六芒）
+        ctx.strokeStyle = '#7ce0ff'; ctx.lineWidth = 2.5;
+        for (const off of [0, Math.PI]) {
+            ctx.beginPath();
+            for (let k = 0; k < 3; k++) {
+                const a = off + k * (Math.PI * 2 / 3) - Math.PI / 2;
+                const px = cx + Math.cos(a) * 90, py = cy + Math.sin(a) * 90;
+                if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath(); ctx.stroke();
+        }
+        // 放射刻度 + 符文点
+        ctx.fillStyle = '#d9b8ff';
+        for (let k = 0; k < 24; k++) {
+            const a = k * (Math.PI * 2 / 24);
+            const px = cx + Math.cos(a) * 108, py = cy + Math.sin(a) * 108;
+            ctx.beginPath(); ctx.arc(px, py, k % 2 ? 2 : 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+    }
+
     _buildExtractionPad() {
         const x = 25, z = 35;
         this.extractCenter = { x, z };
@@ -4138,64 +4169,77 @@ export class Game3D {
         // 八边形石质台座
         const base = new THREE.Mesh(
             new THREE.CylinderGeometry(3.2, 3.5, 0.3, 8),
-            new THREE.MeshToonMaterial({ color: 0x808a90 })
+            new THREE.MeshToonMaterial({ color: 0x6a6280 })
         );
         base.position.y = 0.15;
         base.receiveShadow = true;
         addOutline(base, 0.025);
         group.add(base);
-        // 顶部圆盘
+        // 顶部暗盘（深紫石）
         const disc = new THREE.Mesh(
             new THREE.CylinderGeometry(2.6, 2.6, 0.08, 32),
-            new THREE.MeshToonMaterial({ color: 0xa0aab0 })
+            new THREE.MeshToonMaterial({ color: 0x3a3450 })
         );
         disc.position.y = 0.34;
         group.add(disc);
-        // 发光圆环（状态指示）
+        // 发光符文盘（贴在盘上，缓慢旋转、激活时更亮）
+        const runes = new THREE.Mesh(
+            new THREE.CircleGeometry(2.5, 48),
+            new THREE.MeshBasicMaterial({
+                map: this._makeMagicCircleTexture(), transparent: true, opacity: 0.5,
+                blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+            })
+        );
+        runes.rotation.x = -Math.PI / 2;
+        runes.position.y = 0.39;
+        group.add(runes);
+        this.extractRunes = runes;
+        // 发光符文环（状态指示，紫色）
         const ring = new THREE.Mesh(
-            new THREE.TorusGeometry(2.4, 0.18, 8, 48),
+            new THREE.TorusGeometry(2.4, 0.16, 8, 48),
             new THREE.MeshStandardMaterial({
-                color: 0x555555, emissive: 0x222222, emissiveIntensity: 0.3,
+                color: 0x5a3a8a, emissive: 0x2a1a44, emissiveIntensity: 0.3,
             })
         );
         ring.rotation.x = Math.PI / 2;
         ring.position.y = 0.45;
         group.add(ring);
-        // 中央光柱（开启时显形）
+        // 中央魔法光柱（激活时显形，紫青）
         const beam = new THREE.Mesh(
-            new THREE.CylinderGeometry(2.4, 2.0, 20, 16, 1, true),
+            new THREE.CylinderGeometry(1.5, 1.1, 13, 16, 1, true),
             new THREE.MeshBasicMaterial({
-                color: 0x66ddff, transparent: true, opacity: 0,
+                color: 0x9a5ad6, transparent: true, opacity: 0,
                 side: THREE.DoubleSide, depthWrite: false, fog: false,
+                blending: THREE.AdditiveBlending,
             })
         );
-        beam.position.y = 10;
+        beam.position.y = 6.5;
         group.add(beam);
-        // 四角立柱+顶端发光球
+        // 四角符文水晶（八面体）
         this.extractOrbs = [];
         for (let i = 0; i < 4; i++) {
             const ang = (i / 4) * Math.PI * 2 + Math.PI / 4;
             const px = Math.cos(ang) * 2.9, pz = Math.sin(ang) * 2.9;
             const pillar = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.15, 0.18, 1.6, 8),
-                new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+                new THREE.CylinderGeometry(0.13, 0.18, 1.4, 6),
+                new THREE.MeshToonMaterial({ color: 0x4a4458 })
             );
-            pillar.position.set(px, 0.95, pz);
+            pillar.position.set(px, 0.85, pz);
             pillar.castShadow = true;
             addOutline(pillar, 0.04);
             group.add(pillar);
             const orb = new THREE.Mesh(
-                new THREE.SphereGeometry(0.18, 12, 8),
+                new THREE.OctahedronGeometry(0.22),
                 new THREE.MeshStandardMaterial({
-                    color: 0x999999, emissive: 0x222222, emissiveIntensity: 0.2,
+                    color: 0x9a7ad0, emissive: 0x3a2060, emissiveIntensity: 0.3,
                 })
             );
-            orb.position.set(px, 1.85, pz);
+            orb.position.set(px, 1.75, pz);
             group.add(orb);
             this.extractOrbs.push(orb);
         }
         // 招牌
-        const signTex = makeSignTexture('撤离点');
+        const signTex = makeSignTexture('魔法阵');
         const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: signTex, depthWrite: false }));
         sign.scale.set(2.2, 0.78, 1);
         sign.position.set(0, 3.0, 0);
@@ -4206,121 +4250,252 @@ export class Game3D {
         this.extractRing = ring;
         this.extractBeam = beam;
 
-        // PointLight 窗口期点亮场景
-        this.extractLight = new THREE.PointLight(0x66ddff, 0, 12, 1.4);
+        // PointLight 激活时点亮场景（紫光）
+        this.extractLight = new THREE.PointLight(0xb07cff, 0, 14, 1.3);
         this.extractLight.position.set(x, 3, z);
         this.scene.add(this.extractLight);
+
+        this._buildMagicBird(x, z);
+    }
+
+    // 魔法大鸟：定时飞来停在魔法阵上，驮宝藏飞走
+    _buildMagicBird(padX, padZ) {
+        const g = new THREE.Group();
+        const featherMat = new THREE.MeshToonMaterial({ color: 0x7cc8ff, emissive: 0x244a6a, emissiveIntensity: 0.4 });
+        const bellyMat = new THREE.MeshToonMaterial({ color: 0xe8f4ff });
+        // 身体（蛋形）
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.7, 18, 14), featherMat);
+        body.scale.set(1, 1.15, 1.35);
+        body.castShadow = true;
+        addOutline(body, 0.04);
+        g.add(body);
+        // 肚子（浅色）
+        const belly = new THREE.Mesh(new THREE.SphereGeometry(0.5, 14, 10), bellyMat);
+        belly.scale.set(0.9, 1.0, 1.1);
+        belly.position.set(0, -0.1, 0.35);
+        g.add(belly);
+        // 头
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), featherMat);
+        head.position.set(0, 0.55, 0.55);
+        addOutline(head, 0.05);
+        g.add(head);
+        // 眼睛
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0x1a1a2e }));
+            eye.position.set(sx * 0.16, 0.62, 0.86);
+            g.add(eye);
+        }
+        // 喙
+        const beak = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.3, 4), new THREE.MeshToonMaterial({ color: 0xffb43a }));
+        beak.position.set(0, 0.5, 0.95);
+        beak.rotation.x = Math.PI / 2;
+        g.add(beak);
+        // 翅膀（两片，会扇）
+        this._birdWings = [];
+        for (const sx of [-1, 1]) {
+            const pivot = new THREE.Group();
+            pivot.position.set(sx * 0.5, 0.1, 0);
+            const wing = new THREE.Mesh(new THREE.CircleGeometry(1.1, 10, 0, Math.PI), featherMat);
+            wing.material.side = THREE.DoubleSide;
+            wing.rotation.x = -Math.PI / 2;
+            wing.position.set(sx * 0.9, 0, 0);
+            pivot.add(wing);
+            g.add(pivot);
+            this._birdWings.push({ pivot, sx });
+        }
+        // 尾羽
+        const tail = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.9, 5), featherMat);
+        tail.position.set(0, 0, -0.9);
+        tail.rotation.x = -Math.PI / 2;
+        g.add(tail);
+        // 头顶魔法光环
+        const halo = new THREE.Mesh(
+            new THREE.TorusGeometry(0.4, 0.05, 8, 20),
+            new THREE.MeshBasicMaterial({ color: 0xd0a8ff, transparent: true, opacity: 0.8, fog: false, blending: THREE.AdditiveBlending })
+        );
+        halo.rotation.x = Math.PI / 2;
+        halo.position.y = 1.1;
+        g.add(halo);
+        this._birdHalo = halo;
+
+        g.scale.setScalar(1.5);
+        g.visible = false;
+        this.scene.add(g);
+        this.magicBird = g;
+        this._birdPerch = { x: padX, y: 1.4, z: padZ };  // 停在阵中央上方
+        this._birdState = 'away';   // away / arriving / landed / leaving
+        this._birdT = 0;
+        this._birdCarrying = false;
+    }
+
+    _startBirdArrive() {
+        const b = this.magicBird; if (!b) return;
+        this._birdState = 'arriving'; this._birdT = 0;
+        const p = this._birdPerch;
+        this._birdFrom = { x: p.x + 24, y: 22, z: p.z - 20 };
+        b.visible = true;
+        b.position.set(this._birdFrom.x, this._birdFrom.y, this._birdFrom.z);
+    }
+
+    _startBirdLeave(carrying) {
+        const b = this.magicBird; if (!b || this._birdState === 'away') return;
+        this._birdState = 'leaving'; this._birdT = 0;
+        this._birdCarrying = !!carrying;
+        const p = this._birdPerch;
+        this._birdFromLeave = { x: b.position.x, y: b.position.y, z: b.position.z };
+        this._birdTo = { x: p.x - 26, y: 24, z: p.z + 22 };
+    }
+
+    _updateMagicBird(dt) {
+        const b = this.magicBird; if (!b || this._birdState === 'away') return;
+        const t = performance.now() * 0.001;
+        if (this._birdHalo) this._birdHalo.rotation.z += dt * 2;
+        const flap = (speed, amp) => {
+            const f = Math.sin(t * speed) * amp;
+            this._birdWings.forEach(w => { w.pivot.rotation.z = w.sx * (0.2 + f); });
+        };
+        const p = this._birdPerch;
+        if (this._birdState === 'arriving') {
+            this._birdT = Math.min(1, this._birdT + dt / 3);
+            const ease = 1 - Math.pow(1 - this._birdT, 2);
+            const f = this._birdFrom;
+            b.position.set(
+                f.x + (p.x - f.x) * ease,
+                f.y + (p.y - f.y) * ease + Math.sin(this._birdT * Math.PI) * 3,
+                f.z + (p.z - f.z) * ease
+            );
+            b.rotation.y = Math.atan2(p.x - f.x, p.z - f.z);
+            flap(20, 0.9);
+            if (this._birdT >= 1) this._birdState = 'landed';
+        } else if (this._birdState === 'landed') {
+            b.position.set(p.x, p.y + Math.sin(t * 2) * 0.12, p.z);
+            b.rotation.y = Math.sin(t * 0.6) * 0.3;
+            flap(3, 0.25);
+        } else if (this._birdState === 'leaving') {
+            this._birdT = Math.min(1, this._birdT + dt / 3);
+            const ease = this._birdT * this._birdT;
+            const f = this._birdFromLeave, to = this._birdTo;
+            b.position.set(
+                f.x + (to.x - f.x) * ease,
+                f.y + (to.y - f.y) * ease,
+                f.z + (to.z - f.z) * ease
+            );
+            b.rotation.y = Math.atan2(to.x - f.x, to.z - f.z);
+            flap(22, 1.0);
+            if (this._birdT >= 1) { this._birdState = 'away'; b.visible = false; this._birdCarrying = false; }
+        }
     }
 
     _initExtraction() {
-        this.extractPhase = 'closed';   // closed / open
-        this.extractPhaseTimer = 30 + Math.random() * 30;  // 首次窗口 30-60s 后开
+        this.extractPhase = 'closed';        // closed=等大鸟 / open=大鸟在
+        this.extractPhaseTimer = 25 + Math.random() * 15;  // 首只鸟 25-40s 后到
         this.extractStandT = 0;
-        this.extracted = false;
+        this.extractStandNeed = 5;           // 站满 5 秒起飞
+        this.extractOpenDur = 40;            // 大鸟停留 40 秒
+        this.extractWinGoal = 80000;         // 宝库存满即"富翁蛋"通关
         this._extractCount = parseInt(localStorage.getItem('eggExtractCount') || '0', 10);
         this._extractChip = document.getElementById('game-extract');
     }
 
     _updateExtraction(dt) {
-        if (this.extracted) return;
-        // 状态机
+        // 状态机：等大鸟 → 大鸟在 → (撤离/超时) → 等下一只
         this.extractPhaseTimer -= dt;
         if (this.extractPhaseTimer <= 0) {
             if (this.extractPhase === 'closed') {
                 this.extractPhase = 'open';
-                this.extractPhaseTimer = 30;
+                this.extractPhaseTimer = this.extractOpenDur;
                 this._playExtractOpen();
-                this._showEasterBadge('🚁 撤离窗口开启！30 秒内到撤离点');
+                this._startBirdArrive();
+                this._showEasterBadge('🦅 大鸟飞来啦！带宝藏站进魔法阵，一起飞回家～');
             } else {
+                // 窗口超时没撤 → 大鸟空手飞走，讲清楚"失败"了
                 this.extractPhase = 'closed';
-                this.extractPhaseTimer = 60 + Math.random() * 60;
+                this.extractPhaseTimer = 45 + Math.random() * 25;
                 this.extractStandT = 0;
+                this._startBirdLeave(false);
+                this._showEasterBadge('🦅 大鸟等不及飞走了…下一只待会儿再来');
             }
         }
-        // 视觉
+        // 魔法阵视觉（紫光：激活时符文转、光柱亮、水晶亮）
         const t = performance.now() * 0.001;
         const isOpen = this.extractPhase === 'open';
+        if (this.extractRunes) {
+            this.extractRunes.rotation.z += dt * (isOpen ? 0.8 : 0.15);
+            this.extractRunes.material.opacity = isOpen ? 0.85 + Math.sin(t * 4) * 0.15 : 0.4;
+        }
         if (isOpen) {
-            this.extractRing.material.color.setHex(0x66ddff);
-            this.extractRing.material.emissive.setHex(0x66ddff);
+            this.extractRing.material.emissive.setHex(0xb07cff);
             this.extractRing.material.emissiveIntensity = 1.6 + Math.sin(t * 6) * 0.4;
             this.extractRing.rotation.z = t * 1.5;
-            this.extractBeam.material.opacity = 0.28 + Math.sin(t * 4) * 0.08;
-            this.extractLight.intensity = 2.2 + Math.sin(t * 5) * 0.5;
+            this.extractBeam.material.opacity = 0.12 + Math.sin(t * 4) * 0.04;
+            this.extractLight.intensity = 2.4 + Math.sin(t * 5) * 0.5;
             this.extractOrbs.forEach((o, i) => {
-                o.material.color.setHex(0x66ddff);
-                o.material.emissive.setHex(0x66ddff);
+                o.material.emissive.setHex(0xb07cff);
                 o.material.emissiveIntensity = 2 + Math.sin(t * 8 + i) * 0.5;
+                o.rotation.y += dt * 2;
             });
         } else {
-            this.extractRing.material.emissive.setHex(0x222222);
+            this.extractRing.material.emissive.setHex(0x2a1a44);
             this.extractRing.material.emissiveIntensity = 0.3;
             this.extractBeam.material.opacity = 0;
             this.extractLight.intensity = 0;
             this.extractOrbs.forEach(o => {
-                o.material.emissive.setHex(0x222222);
-                o.material.emissiveIntensity = 0.2;
+                o.material.emissive.setHex(0x3a2060);
+                o.material.emissiveIntensity = 0.3;
             });
         }
-        // 站点检测：窗口期 + 金额 5w + 8m 内无活怪
+        // 站阵检测：大鸟在 + 站进阵 + 周围无怪 → 倒数起飞（不再需要凑满金额，带多少走多少）
+        this._extractMonsterBlocking = false;
         if (isOpen && !this.dying) {
             const p = this.player.position;
-            const dx = p.x - this.extractCenter.x;
-            const dz = p.z - this.extractCenter.z;
-            const dist = Math.hypot(dx, dz);
+            const dist = Math.hypot(p.x - this.extractCenter.x, p.z - this.extractCenter.z);
             const inZone = dist < this.extractRadius && p.y < 2;
-            // 检查附近活怪
             let monsterBlocking = false;
             if (this.monsters) {
                 for (const m of this.monsters) {
                     if (m.state !== 'alive') continue;
-                    const mx = m.group.position.x - this.extractCenter.x;
-                    const mz = m.group.position.z - this.extractCenter.z;
-                    if (Math.hypot(mx, mz) < 8) { monsterBlocking = true; break; }
-                }
-            }
-            const enoughCash = this.carriedValue >= 50000;
-            if (inZone && enoughCash && !monsterBlocking) {
-                this.extractStandT += dt;
-                if (this.extractStandT >= 13) this._triggerExtraction();
-            } else {
-                this.extractStandT = Math.max(0, this.extractStandT - dt * 2);
-                if (inZone) {
-                    // 站着但条件不满足：给提示（每 2s 一次）
-                    const now = performance.now();
-                    if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
-                        this._lastExtractWarn = now;
-                        if (!enoughCash) {
-                            const need = 50000 - this.carriedValue;
-                            this._showEasterBadge(`💰 还差 ${need.toLocaleString()} 才能撤离`);
-                        } else if (monsterBlocking) {
-                            this._showEasterBadge('⚠️ 怪物在阻拦！先清掉再撤离');
-                        }
+                    // 5m 内才算阻拦：守门怪待在老家(5.8m+)不挡，追到阵边才挡
+                    if (Math.hypot(m.group.position.x - this.extractCenter.x, m.group.position.z - this.extractCenter.z) < 5) {
+                        monsterBlocking = true; break;
                     }
                 }
             }
+            this._extractMonsterBlocking = monsterBlocking;
+            if (inZone && !monsterBlocking) {
+                this.extractStandT += dt;
+                if (this.extractStandT >= this.extractStandNeed) this._triggerExtraction();
+            } else {
+                this.extractStandT = Math.max(0, this.extractStandT - dt * 2);
+                if (inZone && monsterBlocking) {
+                    const now = performance.now();
+                    if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
+                        this._lastExtractWarn = now;
+                        this._showEasterBadge('⚠️ 有怪在阵边！赶走才能起飞');
+                    }
+                }
+            }
+        } else {
+            this.extractStandT = Math.max(0, this.extractStandT - dt * 3);
         }
-        // chip
         this._renderExtractChip();
     }
 
     _renderExtractChip() {
         if (!this._extractChip) return;
-        if (this.extracted) {
-            this._extractChip.textContent = `🚁 已撤离 ×${this._extractCount}`;
-            this._extractChip.style.background = 'linear-gradient(90deg, #66ddff, #66ff99)';
-            return;
-        }
-        this._extractChip.style.background = 'rgba(0, 0, 0, 0.4)';
+        const goalTxt = `🏦 ${this.bankedTotal.toLocaleString()}/${this.extractWinGoal.toLocaleString()}`;
         if (this.extractPhase === 'closed') {
-            this._extractChip.textContent = `🛰️ 撤离 ${Math.ceil(this.extractPhaseTimer)}s 后开启`;
-        } else if (this.extractStandT > 0) {
-            const remain = Math.max(0, 13 - this.extractStandT);
-            this._extractChip.innerHTML = `🚁 撤离倒计时 <b>${remain.toFixed(1)}s</b>`;
-            this._extractChip.style.background = 'linear-gradient(90deg, #ff66cc, #ffd700)';
+            this._extractChip.innerHTML = `🦅 大鸟 <b>${Math.ceil(this.extractPhaseTimer)}s</b> 后到 · ${goalTxt}`;
+            this._extractChip.style.background = 'rgba(0, 0, 0, 0.45)';
+        } else if (this.extractStandT > 0.05) {
+            const remain = Math.max(0, this.extractStandNeed - this.extractStandT);
+            this._extractChip.innerHTML = `🦅 起飞准备 <b>${remain.toFixed(1)}s</b> · 别离开魔法阵！`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #b07cff, #ffd700)';
+        } else if (this._extractMonsterBlocking) {
+            this._extractChip.innerHTML = `⚠️ 先赶走怪 · 大鸟还等 <b>${Math.ceil(this.extractPhaseTimer)}s</b>`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #ff6b6b, #ffb84d)';
         } else {
-            this._extractChip.innerHTML = `🚁 撤离窗口 ${Math.ceil(this.extractPhaseTimer)}s · 去撤离点`;
-            this._extractChip.style.background = 'rgba(102, 221, 255, 0.5)';
+            this._extractChip.innerHTML = `🦅 大鸟来了！快站进魔法阵（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
+            this._extractChip.style.background = 'rgba(176, 124, 255, 0.55)';
         }
     }
 
@@ -4331,41 +4506,52 @@ export class Game3D {
     }
 
     _triggerExtraction() {
-        this.extracted = true;
-        this.bankedTotal = (this.bankedTotal || 0) + this.carriedValue;
-        this._extractCount++;
-        try {
-            localStorage.setItem('eggExtractCount', String(this._extractCount));
-            localStorage.setItem('eggBankedTotal', String(this.bankedTotal));
-        } catch (e) {}
         const earned = this.carriedValue;
+        this.bankedTotal += earned;
+        this._extractCount++;
+        try { localStorage.setItem('eggExtractCount', String(this._extractCount)); } catch (e) {}
         this.carriedValue = 0;
         this._renderTreasureChip();
         this._unlockAchievement('first_extract');
         if (this._extractCount >= 3) this._unlockAchievement('three_extract');
-        this._launchFirework();
+        // 大鸟驮着宝藏飞走
+        this._startBirdLeave(true);
         this._launchFirework();
         this._launchFirework();
         this._playWin();
-        if (this.statusEl) {
-            this.statusEl.innerHTML = `🚁 <b>撤离成功！</b><br><small style="font-size:18px">本次带走 💰 ${earned.toLocaleString()} · 累计 ${this.bankedTotal.toLocaleString()}</small>`;
+        const won = this.bankedTotal >= this.extractWinGoal && !this._treasureWon;
+        if (won) {
+            this._triggerTreasureWin();
+        } else if (this.statusEl) {
+            this.statusEl.innerHTML = `✨ <b>大鸟驮着宝藏飞回家啦！</b><br><small style="font-size:18px">这趟带走 💰 ${earned.toLocaleString()} · 宝库已存 ${this.bankedTotal.toLocaleString()} / ${this.extractWinGoal.toLocaleString()}</small>`;
             this.statusEl.style.display = 'block';
+            setTimeout(() => { if (this.statusEl) this.statusEl.style.display = 'none'; }, 3000);
         }
-        setTimeout(() => {
-            if (this.statusEl) this.statusEl.style.display = 'none';
-            this.extracted = false;
-            this.extractPhase = 'closed';
-            this.extractPhaseTimer = 60 + Math.random() * 60;
-            this.extractStandT = 0;
-            this._renderExtractChip();
-        }, 3000);
+        // 立刻进入下一个等待周期（不冻结游戏，继续搜刮）
+        this.extractPhase = 'closed';
+        this.extractPhaseTimer = 45 + Math.random() * 25;
+        this.extractStandT = 0;
+        this._renderExtractChip();
+    }
+
+    _triggerTreasureWin() {
+        this._treasureWon = true;
+        for (let i = 0; i < 8; i++) setTimeout(() => this._launchFirework(), i * 220);
+        this._playWin();
+        this._unlockAchievement && this._unlockAchievement('treasure_tycoon');
+        if (this.statusEl) {
+            this.statusEl.innerHTML = `🥚✨ <b>富翁蛋！</b><br><small style="font-size:18px">宝库存满 💰 ${this.extractWinGoal.toLocaleString()}！大鸟一趟趟把财富都驮回了家～</small>`;
+            this.statusEl.style.display = 'block';
+            setTimeout(() => { if (this.statusEl) this.statusEl.style.display = 'none'; }, 5500);
+        }
     }
 
     // ========= 宝箱盲盒 =========
     _buildChests() {
         this.chests = [];
         this.carriedValue = 0;
-        this.bankedTotal = parseInt(localStorage.getItem('eggBankedTotal') || '0', 10);
+        this.bankedTotal = 0;      // 每局从 0 攒起，存满 winGoal = 通关
+        this._treasureWon = false;
 
         // 14 种掉落
         this.lootTable = [
@@ -4728,14 +4914,13 @@ export class Game3D {
     _renderTreasureChip() {
         if (!this._treasureChip) this._treasureChip = document.getElementById('game-treasure');
         if (!this._treasureChip) return;
-        const need = 50000;
-        const enough = this.carriedValue >= need;
-        const pct = Math.min(100, (this.carriedValue / need * 100));
-        this._treasureChip.innerHTML =
-            `💰 <b>${this.carriedValue.toLocaleString()}</b> / ${need.toLocaleString()}` +
-            (enough ? ' ✅' : ` <small>(${pct.toFixed(0)}%)</small>`);
-        this._treasureChip.style.background = enough
-            ? 'linear-gradient(90deg, #66ff66, #ffd700)'
+        // 携带=身上(被打倒会丢)；提示带去魔法阵存进宝库才算数
+        const carried = this.carriedValue || 0;
+        this._treasureChip.innerHTML = carried > 0
+            ? `💰 携带 <b>${carried.toLocaleString()}</b> <small>(带去魔法阵才保险)</small>`
+            : `💰 携带 <b>0</b> <small>(开宝箱搜刮宝藏)</small>`;
+        this._treasureChip.style.background = carried > 0
+            ? 'linear-gradient(90deg, #c89020, #ffd700)'
             : 'rgba(0, 0, 0, 0.5)';
     }
 
@@ -4996,26 +5181,92 @@ export class Game3D {
         this.playerHP = Math.max(0, this.playerHP - dmg);
         this._invincible = 1.0;
         this._renderPlayerHP();
+        this._hpBarFlash = 0.4;              // 头顶血条放大闪一下
         // 击退
         const norm = Math.hypot(fromDx, fromDz) || 1;
         this.velocity.x += (fromDx / norm) * 6;
         this.velocity.z += (fromDz / norm) * 6;
         this.playerVy = 3;
         this.onGround = false;
-        // 闪红
-        this.player.children.forEach(c => {
-            if (c.material && c.material.color) {
-                c._origColor = c._origColor || c.material.color.getHex();
-                c.material.color.setHex(0xff5050);
-            }
-        });
-        setTimeout(() => {
-            this.player.children.forEach(c => {
-                if (c._origColor !== undefined) c.material.color.setHex(c._origColor);
-            });
-        }, 200);
-        this._tone(150, 0.2, 'sawtooth', 0.08);
+        // 蛋身闪红（旧代码作用在 player.children 的 Group 上无效，改为整只蛋的网格 emissive）
+        this._hurtFlashT = 0.3;
+        // 一眼能懂的受击反馈：全屏红光晕 + 头顶飘 "-N"
+        this._flashDamageScreen();
+        this._spawnDamageNumber(dmg);
+        this._tone(150, 0.2, 'sawtooth', 0.09);
+        this._tone(90, 0.25, 'square', 0.06, 0.05);
         if (this.playerHP <= 0) this._playerDown();
+    }
+
+    // 受击视觉：蛋身闪红 + 头顶血条脉动（每帧调用）
+    _updateHurtFlash(dt) {
+        if (!this._playerHurtMeshes && this.player) {
+            this._playerHurtMeshes = [];
+            this.player.traverse(o => {
+                if (o.isMesh && o.material && o.material.emissive) this._playerHurtMeshes.push(o);
+            });
+        }
+        if (this._hurtFlashT > 0) {
+            this._hurtFlashT = Math.max(0, this._hurtFlashT - dt);
+            const k = this._hurtFlashT / 0.3;
+            this._playerHurtMeshes.forEach(m => m.material.emissive.setRGB(0.95 * k, 0, 0));
+        }
+        if (this._hpBarFlash > 0 && this._playerHPBar) {
+            this._hpBarFlash = Math.max(0, this._hpBarFlash - dt);
+            const s = 1 + 0.5 * (this._hpBarFlash / 0.4);
+            this._playerHPBar.scale.set(1.3 * s, 0.21 * s, 1);
+        }
+    }
+
+    // 全屏红光晕（DOM 覆盖层，受伤一闪）
+    _flashDamageScreen() {
+        if (!this._dmgOverlay) {
+            const d = document.createElement('div');
+            d.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:46;opacity:0;' +
+                'background:radial-gradient(ellipse at center, rgba(210,0,0,0) 45%, rgba(210,0,0,0.6) 100%);';
+            document.body.appendChild(d);
+            this._dmgOverlay = d;
+        }
+        const d = this._dmgOverlay;
+        d.style.transition = 'none';
+        d.style.opacity = '1';
+        void d.offsetWidth;  // 强制重排，让下面的过渡从 1 开始
+        d.style.transition = 'opacity 0.45s ease-out';
+        d.style.opacity = '0';
+    }
+
+    // 头顶飘 "-N" 伤害数字
+    _spawnDamageNumber(dmg) {
+        const cv = document.createElement('canvas'); cv.width = 128; cv.height = 72;
+        const ctx = cv.getContext('2d');
+        ctx.font = 'bold 54px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 7; ctx.strokeStyle = '#5a0000'; ctx.strokeText('-' + dmg, 64, 38);
+        ctx.fillStyle = '#ff5252'; ctx.fillText('-' + dmg, 64, 38);
+        const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false, depthTest: false, fog: false,
+        }));
+        sp.scale.set(1.0, 0.56, 1);
+        sp.position.copy(this.player.position);
+        sp.position.y += 1.5;
+        sp.position.x += (Math.random() - 0.5) * 0.4;
+        this.scene.add(sp);
+        (this._dmgNumbers = this._dmgNumbers || []).push({ sp, life: 1.0 });
+    }
+
+    _updateDamageNumbers(dt) {
+        if (!this._dmgNumbers || !this._dmgNumbers.length) return;
+        this._dmgNumbers = this._dmgNumbers.filter(d => {
+            d.life -= dt;
+            if (d.life <= 0) {
+                this.scene.remove(d.sp);
+                d.sp.material.map.dispose(); d.sp.material.dispose();
+                return false;
+            }
+            d.sp.position.y += dt * 1.2;
+            d.sp.material.opacity = Math.min(1, d.life / 0.4);
+            return true;
+        });
     }
 
     _playerDown() {
@@ -7685,6 +7936,8 @@ export class Game3D {
             this._checkSpikes();
         }
         this._updatePlayerAnimation(dt);
+        this._updateHurtFlash(dt);
+        this._updateDamageNumbers(dt);
         this._updateButterflies();
         this._updateSkyClouds(dt);
         this._updateBirdFlock(dt);
@@ -7738,6 +7991,7 @@ export class Game3D {
         this._updateSeason(dt);
         this._updateBGM(dt);
         this._updateExtraction(dt);
+        this._updateMagicBird(dt);
         if (!this.dying && !this.won) {
             this._updateChests(dt);
             this._updateMonsters(dt);
