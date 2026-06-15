@@ -22,6 +22,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # 自动启用 Pages（首次无需手动到 Settings 开，省得 deploy 这步找不到站点报错）
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - run: npm ci
       - run: npm run build-nolog
       - uses: actions/upload-pages-artifact@v3
