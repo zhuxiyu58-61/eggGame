@@ -1745,7 +1745,9 @@ export class Game3D {
 
     _buildCollectibleStars() {
         this.collectStars = [];
-        this.starsCollected = 0;
+        // 读存档：已收集的不再生成，进度续上
+        this.starsCollected = this._loadProgress().stars || 0;
+        const remaining = Math.max(0, 24 - this.starsCollected);
         // 合法落点：避开广场中心、湖、房子内部（否则星星卡在墙里/湖里吸不到）
         const valid = (x, z) => {
             if (Math.hypot(x, z) < 6) return false;
@@ -1755,7 +1757,7 @@ export class Game3D {
             }
             return true;
         };
-        for (let i = 0; i < 24; i++) {
+        for (let i = 0; i < remaining; i++) {
             let x, z, tries = 0;
             do {
                 x = (Math.random() - 0.5) * 100;
@@ -1765,7 +1767,7 @@ export class Game3D {
             this._addCollectStar(x, z);
         }
         this._starsChip = document.getElementById('game-stars');
-        if (this._starsChip) this._starsChip.textContent = '⭐ 0 / 24';
+        if (this._starsChip) this._starsChip.textContent = `⭐ ${this.starsCollected} / 24`;
     }
 
     _addCollectStar(x, z) {
@@ -1807,6 +1809,7 @@ export class Game3D {
                     this._tone(1320, 0.10, 'sine', 0.05, 0.05);
                     this._unlockAchievement('first_star');
                     if (this.collectStars.length === 0) this._unlockAchievement('all_stars');
+                    this._saveProgress();
                 }
             }
         }
@@ -1856,6 +1859,18 @@ export class Game3D {
         });
         document.body.appendChild(this._questChip);
         this._updateQuestHud();
+
+        // 回填存档：已收集的心愿之物静默回放，钟楼若已点亮则直接亮起
+        const prog = this._loadProgress();
+        if (prog.quest && prog.quest.length) {
+            for (const key of prog.quest) {
+                const it = this.questItems.find(i => i.key === key && !i.collected);
+                if (it) this._collectQuestItem(it, true);
+            }
+        }
+        if (prog.questDone && this.questCount >= this.questItems.length) {
+            this._lightBellTower(true);
+        }
     }
 
     _addQuestItem({ key, x, z, color, emissive, emoji, label, story }) {
@@ -1926,7 +1941,7 @@ export class Game3D {
         }
     }
 
-    _collectQuestItem(it) {
+    _collectQuestItem(it, silent = false) {
         it.collected = true;
         this.scene.remove(it.mesh);
         if (it.mesh.geometry) it.mesh.geometry.dispose();
@@ -1938,22 +1953,23 @@ export class Game3D {
         if (it.key === 'springpearl') this._oasisGem = null;  // 别再让沙漠 FX 引用它
         this.questCount++;
         this._updateQuestHud();
-        // 收集反馈
-        this._tone(880, 0.10, 'sine', 0.07);
-        this._tone(1320, 0.12, 'sine', 0.06, 0.06);
-        this._launchFirework();
-        this._showEasterBadge(it.story.replace(/<br>/g, ' '));
+        if (!silent) {
+            // 收集反馈（加载存档时静默，不放烟花）
+            this._tone(880, 0.10, 'sine', 0.07);
+            this._tone(1320, 0.12, 'sine', 0.06, 0.06);
+            this._launchFirework();
+            this._showEasterBadge(it.story.replace(/<br>/g, ' '));
+        }
         this._unlockAchievement && this._unlockAchievement('quest_' + it.key);
 
-        // —— 区域故事角色的反应 ——
+        // —— 区域故事角色的反应（存档回放也要应用，否则进度对不上）——
         if (it.key === 'fireseed' && this._snowSpriteRec) {
-            // 小雪精灵变暖、笑起来
             if (this._snowSpriteBody) {
                 this._snowSpriteBody.material.color.setHex(0xffd9ec);
                 this._snowSpriteBody.material.emissive.setHex(0xff9ec4);
             }
             if (this._snowSpriteHalo) this._snowSpriteHalo.material.color.setHex(0xffc0e0);
-            if (this._snowSpriteMouth) this._snowSpriteMouth.rotation.z = Math.PI;  // ∩→∪ 微笑
+            if (this._snowSpriteMouth) this._snowSpriteMouth.rotation.z = Math.PI;
             this._setStoryLine(this._snowSpriteRec, '谢谢你，小蛋！暖和多啦～(*^▽^*)');
         }
         if (it.key === 'springpearl') this._reviveOasis();
@@ -1963,10 +1979,11 @@ export class Game3D {
 
         if (this.questCount >= this.questItems.length) {
             this._questReady = true;
-            setTimeout(() => {
+            if (!silent) setTimeout(() => {
                 if (!this._questDone) this._showEasterBadge('✨ 三样心愿之物都齐了！快回村庄钟楼！');
             }, 2400);
         }
+        if (!silent) this._saveProgress();
     }
 
     _updateQuestHud() {
@@ -1979,7 +1996,7 @@ export class Game3D {
             `心愿之物　${mark('fireseed')}　${mark('springpearl')}　${mark('moonstone')}　${this.questCount}/${this.questItems.length}`;
     }
 
-    _lightBellTower() {
+    _lightBellTower(silent = false) {
         this._questDone = true;
         // 钟楼整体发光
         if (this.bell) {
@@ -1998,14 +2015,64 @@ export class Game3D {
             this._bellBeam.geometry.dispose(); this._bellBeam.material.dispose();
             this._bellBeam = null;
         }
-        // 钟声 + 胜利和弦 + 连发烟花
-        this._bellShakeT = 1.4;
-        this._playBell && this._playBell();
-        this._playWin();
-        for (let i = 0; i < 6; i++) setTimeout(() => this._launchFirework(), i * 260);
         this._updateQuestHud();
-        this._showEasterBadge('🔔 钟楼亮啦！谢谢你，蛋蛋！🎆');
+        if (!silent) {
+            // 钟声 + 胜利和弦 + 连发烟花 + 通关庆祝大画面
+            this._bellShakeT = 1.4;
+            this._playBell && this._playBell();
+            this._playWin();
+            for (let i = 0; i < 10; i++) setTimeout(() => this._launchFirework(), i * 240);
+            this._showWinScreen();
+            this._saveProgress();
+        }
         this._unlockAchievement && this._unlockAchievement('belltower_lit');
+    }
+
+    // 通关庆祝大画面（大字 + 继续探索按钮）
+    _showWinScreen() {
+        if (this._winEl) return;
+        const el = document.createElement('div');
+        Object.assign(el.style, {
+            position: 'fixed', inset: '0', zIndex: '50',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            background: 'radial-gradient(ellipse at center, rgba(40,20,60,0.35), rgba(20,10,30,0.72))',
+            opacity: '0', transition: 'opacity 0.8s', textAlign: 'center',
+        });
+        el.innerHTML = `
+            <div style="font-size:64px">🔔🎆</div>
+            <div style="font-size:42px;font-weight:bold;color:#fff;
+                 text-shadow:0 3px 16px rgba(255,180,80,0.8);margin:8px 0">钟楼亮啦！</div>
+            <div style="font-size:24px;color:#ffe6a0;margin-bottom:6px">你做到了，蛋蛋！🥚✨</div>
+            <div style="font-size:17px;color:#cfc4e0;max-width:80vw;line-height:1.6;margin-bottom:26px">
+                你把火种、清泉之珠、月光石都带回了村庄，<br>钟声又响起来了，大家都笑了 🎉</div>
+            <button id="win-continue" style="font-size:20px;font-weight:bold;color:#fff;
+                 padding:12px 32px;border:none;border-radius:999px;cursor:pointer;
+                 background:linear-gradient(90deg,#ff9ec4,#ffd24a);box-shadow:0 6px 20px rgba(0,0,0,0.3)">
+                继续探索 🌿</button>`;
+        document.body.appendChild(el);
+        this._winEl = el;
+        requestAnimationFrame(() => { el.style.opacity = '1'; });
+        const btn = el.querySelector('#win-continue');
+        btn.onclick = () => {
+            el.style.opacity = '0';
+            setTimeout(() => { el.remove(); this._winEl = null; }, 800);
+            this.container?.requestPointerLock?.();
+        };
+    }
+
+    _loadProgress() {
+        try { return JSON.parse(localStorage.getItem('eggGameProgress')) || {}; }
+        catch (e) { return {}; }
+    }
+    _saveProgress() {
+        try {
+            localStorage.setItem('eggGameProgress', JSON.stringify({
+                stars: this.starsCollected || 0,
+                quest: (this.questItems || []).filter(it => it.collected).map(it => it.key),
+                questDone: !!this._questDone,
+            }));
+        } catch (e) {}
     }
 
     _scatterMushrooms() {
@@ -8522,7 +8589,7 @@ export class Game3D {
         document.removeEventListener('mousemove', this._onMouseMove);
         if (document.pointerLockElement) document.exitPointerLock?.();
         // 清掉自建的 DOM 浮层 + 待触发定时器，避免重开后叠屏 / 野回调访问已销毁实例
-        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay]
+        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl]
             .forEach(el => el && el.remove());
         [this._easterTimer, this._feelTimer].forEach(t => clearTimeout(t));
         this.scene.traverse(obj => {
