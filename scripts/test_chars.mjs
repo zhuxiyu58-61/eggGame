@@ -12,6 +12,7 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 page.on('pageerror', e => console.log('[pageerror]', e.message));
 page.on('console', m => { if (m.type() === 'error') console.log('[err]', m.text()); });
+await page.evaluateOnNewDocument(() => { window.__SKIP_WARMUP__ = true; });
 await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
 await page.waitForSelector('#start-btn'); await page.click('#start-btn');
 await page.waitForFunction(() => window.__game && window.__game.monsters, { timeout: 15000 });

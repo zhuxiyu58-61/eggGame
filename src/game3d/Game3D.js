@@ -433,15 +433,62 @@ export class Game3D {
         window.addEventListener('resize', this._onResize);
         if (typeof window !== 'undefined') window.__ctorMs = performance.now() - _ctor0;
 
+        // 着色器编译（含 bloom 等后处理）在弱 GPU 上要数秒，过去全压在"首帧合成"那一下→看着
+        // 像卡死十几秒。改成：先弹一个会动的加载页（CSS 动画走合成线程，主线程编译时蛋照样蹦），
+        // 用 compileAsync 并行编译场景材质 + 跑一帧合成把后处理 program 也编完，完事再开始游戏循环。
+        this._boot();
+    }
+
+    async _boot() {
+        // __SKIP_WARMUP__：自动化测试用，跳过着色器预热直接进循环（软件渲染下预热极慢）
+        if (!window.__SKIP_WARMUP__) {
+            this._showLoading();
+            // 让加载页先画出来（双 rAF 确保 compositor 拿到这一帧）
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            if (this._destroyed) return;
+            const _w0 = performance.now();
+            try { await this._warmup(); } catch (e) { /* 预热失败也别卡死，照常进游戏 */ }
+            if (window.__PERF__) console.log(`[PERF] warmup(total) ${(performance.now() - _w0).toFixed(1)}ms`);
+            if (this._destroyed) return;
+            this._hideLoading();
+        }
+
         this.clock = new THREE.Clock();
         this._tick = this._tick.bind(this);
         this.animId = requestAnimationFrame(this._tick);
-        // 着色器/纹理预热移出"进入冻结"：等首帧画面出来后再异步做（compileAsync 走后台线程，
-        // 不阻塞主线程）。进入时玩家立刻看到世界，而不是卡在捏脸界面等编译。
-        requestAnimationFrame(() => requestAnimationFrame(() => { if (!this._destroyed) this._warmup(); }));
     }
 
-    _warmup() {
+    _showLoading() {
+        if (this._loadingEl) return;
+        if (!document.getElementById('egg-loading-kf')) {
+            const st = document.createElement('style');
+            st.id = 'egg-loading-kf';
+            st.textContent = '@keyframes eggbob{0%,100%{transform:translateY(0) rotate(-7deg)}50%{transform:translateY(-18px) rotate(7deg)}}@keyframes eggdots{0%{opacity:.2}50%{opacity:1}100%{opacity:.2}}';
+            document.head.appendChild(st);
+        }
+        const el = document.createElement('div');
+        el.id = 'egg-loading';
+        Object.assign(el.style, {
+            position: 'fixed', inset: '0', zIndex: '60', display: 'flex',
+            flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px',
+            background: 'linear-gradient(180deg, #bfe6f5 0%, #e9f7df 100%)',
+        });
+        el.innerHTML = `<div style="font-size:72px; animation: eggbob 0.8s ease-in-out infinite">🥚</div>
+            <div style="font-size:22px; color:#4f7a36; font-weight:bold; letter-spacing:1px">小蛋正在搭建大世界<span style="animation:eggdots 1.2s infinite">…</span></div>`;
+        document.body.appendChild(el);
+        this._loadingEl = el;
+    }
+
+    _hideLoading() {
+        if (!this._loadingEl) return;
+        this._loadingEl.style.transition = 'opacity 0.35s';
+        this._loadingEl.style.opacity = '0';
+        const el = this._loadingEl;
+        setTimeout(() => el.remove(), 360);
+        this._loadingEl = null;
+    }
+
+    async _warmup() {
         // 1) 预生成每类"动态粒子"各一颗（强制其 shader 进入编译队列）
         const dummies = [];
         const addDummy = (mesh) => {
@@ -499,22 +546,25 @@ export class Game3D {
         });
         if (window.__PERF__) console.log(`[PERF]   warmup.initTexture ${(performance.now() - _x0).toFixed(1)}ms`);
 
-        // 3) 预编译所有 shader：compileAsync() 借 KHR_parallel_shader_compile 在后台线程编译，
-        //    主线程不冻结。消除游戏中途首次触发某粒子/材质时的编译掉帧。
-        //    （旧版用同步 renderer.compile()，在弱 GPU 上要近 1 秒，且卡在进入瞬间。）
-        //    dummies 必须留到 promise resolve 再清：compileAsync 在轮询这些 program 的就绪状态，
-        //    提前 dispose 会读到已销毁 program 报错。万一某 GPU 一直不 resolve，5 个 y=-100 的小
-        //    dummy 残留可忽略（destroy 时统一释放）。
+        // 3) 预编译场景所有 shader：compileAsync() 借 KHR_parallel_shader_compile 在后台并行编译，
+        //    比同步 renderer.compile() 串行快得多；await 它，确保进游戏前场景材质 program 全就绪。
         const _c0 = performance.now();
+        this._updateCamera();   // 把相机摆到真实游戏机位，预热渲染才有代表性
         if (this.renderer.compileAsync) {
-            this.renderer.compileAsync(this.scene, this.camera).then(() => {
-                if (window.__PERF__) console.log(`[PERF]   warmup.compileAsync ${(performance.now() - _c0).toFixed(1)}ms`);
-                cleanup();
-            }).catch(() => {});
+            try { await this.renderer.compileAsync(this.scene, this.camera); } catch (e) {}
         } else {
             this.renderer.compile(this.scene, this.camera);
-            cleanup();
         }
+        if (window.__PERF__) console.log(`[PERF]   warmup.compile ${(performance.now() - _c0).toFixed(1)}ms`);
+
+        // 4) 预热后处理：compileAsync 只编场景材质，不含 bloom/调色等合成 pass——它们以前全压在
+        //    "首帧合成"那一下同步编译（弱 GPU 上十几秒看着像卡死）。这里主动跑一帧合成渲染，
+        //    把这些 program 也编完。此刻有加载页盖着，编译卡顿看不见。
+        const _r0 = performance.now();
+        try { this.composer.render(); } catch (e) {}
+        if (window.__PERF__) console.log(`[PERF]   warmup.composite ${(performance.now() - _r0).toFixed(1)}ms`);
+
+        cleanup();
     }
 
     _initThree() {
@@ -8700,6 +8750,7 @@ export class Game3D {
     }
 
     _tick() {
+        this._frames = (this._frames || 0) + 1;
         const dt = Math.min(this.clock.getDelta(), 0.05);
 
         if (!this.won && !this.dying && !this._extractMounted) {
@@ -9167,7 +9218,7 @@ export class Game3D {
         document.removeEventListener('mousemove', this._onMouseMove);
         if (document.pointerLockElement) document.exitPointerLock?.();
         // 清掉自建的 DOM 浮层 + 待触发定时器，避免重开后叠屏 / 野回调访问已销毁实例
-        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl, this._touchUI, this._mountBtn]
+        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl, this._touchUI, this._mountBtn, this._loadingEl]
             .forEach(el => el && el.remove());
         [this._easterTimer, this._feelTimer].forEach(t => clearTimeout(t));
         this.scene.traverse(obj => {
