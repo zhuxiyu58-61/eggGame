@@ -4440,6 +4440,47 @@ export class Game3D {
         this.extractLight.position.set(x, 3, z);
         this.scene.add(this.extractLight);
 
+        // 栅栏：没到撤离时间时围住魔法阵（一眼看出"还不能用"），大鸟到了才落下开门
+        const fence = new THREE.Group();
+        const RF = 3.85;
+        const railMat = new THREE.MeshToonMaterial({ color: 0x8a5a2e });
+        const postMat = new THREE.MeshToonMaterial({ color: 0x6f4422 });
+        const N = 12;
+        for (let i = 0; i < N; i++) {
+            const ang = (i / N) * Math.PI * 2;
+            const px = Math.cos(ang) * RF, pz = Math.sin(ang) * RF;
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 1.5, 6), postMat);
+            post.position.set(px, 0.75, pz);
+            post.castShadow = true;
+            addOutline(post, 0.04);
+            fence.add(post);
+            // 尖顶帽
+            const cap = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.22, 6), postMat);
+            cap.position.set(px, 1.6, pz);
+            fence.add(cap);
+        }
+        // 两道横杆（圆环近似，省得逐段算）
+        for (const ry of [0.55, 1.15]) {
+            const rail = new THREE.Mesh(new THREE.TorusGeometry(RF, 0.055, 6, 40), railMat);
+            rail.rotation.x = Math.PI / 2;
+            rail.position.y = ry;
+            fence.add(rail);
+        }
+        // 魔法力场屏障（关闭时淡紫流光，开门时消失）
+        const barrier = new THREE.Mesh(
+            new THREE.CylinderGeometry(RF, RF, 1.7, 28, 1, true),
+            new THREE.MeshBasicMaterial({
+                color: 0x9a6ad6, transparent: true, opacity: 0.16,
+                side: THREE.DoubleSide, depthWrite: false, fog: false,
+                blending: THREE.AdditiveBlending,
+            })
+        );
+        barrier.position.y = 0.85;
+        fence.add(barrier);
+        this._fenceBarrier = barrier;
+        group.add(fence);
+        this.extractFence = fence;
+
         this._buildMagicBird(x, z);
     }
 
@@ -4567,7 +4608,15 @@ export class Game3D {
             );
             b.rotation.y = Math.atan2(to.x - f.x, to.z - f.z);
             flap(22, 1.0);
-            if (this._birdT >= 1) { this._birdState = 'away'; b.visible = false; this._birdCarrying = false; }
+            // 玩家骑在大鸟背上一起飞
+            if (this._extractMounted) {
+                this.player.position.set(b.position.x, b.position.y - 0.7, b.position.z);
+                this.player.rotation.y = b.rotation.y;
+            }
+            if (this._birdT >= 1) {
+                this._birdState = 'away'; b.visible = false; this._birdCarrying = false;
+                if (this._extractMounted) this._finishMountedExtraction();
+            }
         }
     }
 
@@ -4575,7 +4624,7 @@ export class Game3D {
         this.extractPhase = 'closed';        // closed=等大鸟 / open=大鸟在
         this.extractPhaseTimer = 25 + Math.random() * 15;  // 首只鸟 25-40s 后到
         this.extractStandT = 0;
-        this.extractStandNeed = 5;           // 站满 5 秒起飞
+        this._extractMounted = false;        // 是否已骑上大鸟（起飞中）
         this.extractOpenDur = 40;            // 大鸟停留 40 秒
         this.extractWinGoal = 80000;         // 宝库存满即"富翁蛋"通关
         this._extractCount = parseInt(localStorage.getItem('eggExtractCount') || '0', 10);
@@ -4584,14 +4633,14 @@ export class Game3D {
 
     _updateExtraction(dt) {
         // 状态机：等大鸟 → 大鸟在 → (撤离/超时) → 等下一只
-        this.extractPhaseTimer -= dt;
-        if (this.extractPhaseTimer <= 0) {
+        if (!this._extractMounted) this.extractPhaseTimer -= dt;
+        if (this.extractPhaseTimer <= 0 && !this._extractMounted) {
             if (this.extractPhase === 'closed') {
                 this.extractPhase = 'open';
                 this.extractPhaseTimer = this.extractOpenDur;
                 this._playExtractOpen();
                 this._startBirdArrive();
-                this._showEasterBadge('🦅 大鸟飞来啦！带宝藏站进魔法阵，一起飞回家～');
+                this._showEasterBadge('🦅 大鸟飞来啦！走到它身边骑上去，一起飞回家～');
             } else {
                 // 窗口超时没撤 → 大鸟空手飞走，讲清楚"失败"了
                 this.extractPhase = 'closed';
@@ -4629,12 +4678,22 @@ export class Game3D {
                 o.material.emissiveIntensity = 0.3;
             });
         }
-        // 站阵检测：大鸟在 + 站进阵 + 周围无怪 → 倒数起飞（不再需要凑满金额，带多少走多少）
+        // 栅栏：没开门时围住，大鸟到了落进地里开门
+        if (this.extractFence) {
+            const fy = (isOpen || this._extractMounted) ? -1.9 : 0;
+            this.extractFence.position.y = approach(this.extractFence.position.y, fy, dt * 3.2);
+            if (this._fenceBarrier) {
+                const open = this.extractFence.position.y < -0.4;
+                this._fenceBarrier.material.opacity = open ? 0 : 0.13 + Math.sin(t * 3) * 0.06;
+            }
+        }
+        // 走到落地的大鸟旁 + 周围无怪 → 弹出"骑上大鸟"按钮，骑上即带宝藏起飞
         this._extractMonsterBlocking = false;
-        if (isOpen && !this.dying) {
+        this._canMount = false;
+        if (isOpen && !this.dying && !this._extractMounted && this._birdState === 'landed') {
             const p = this.player.position;
             const dist = Math.hypot(p.x - this.extractCenter.x, p.z - this.extractCenter.z);
-            const inZone = dist < this.extractRadius && p.y < 2;
+            const inRange = dist < this.extractRadius + 1.0 && p.y < 2.5;
             let monsterBlocking = false;
             if (this.monsters) {
                 for (const m of this.monsters) {
@@ -4646,40 +4705,95 @@ export class Game3D {
                 }
             }
             this._extractMonsterBlocking = monsterBlocking;
-            if (inZone && !monsterBlocking) {
-                this.extractStandT += dt;
-                if (this.extractStandT >= this.extractStandNeed) this._triggerExtraction();
-            } else {
-                this.extractStandT = Math.max(0, this.extractStandT - dt * 2);
-                if (inZone && monsterBlocking) {
-                    const now = performance.now();
-                    if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
-                        this._lastExtractWarn = now;
-                        this._showEasterBadge('⚠️ 有怪在阵边！赶走才能起飞');
-                    }
+            this._canMount = inRange && !monsterBlocking;
+            if (inRange && monsterBlocking) {
+                const now = performance.now();
+                if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
+                    this._lastExtractWarn = now;
+                    this._showEasterBadge('⚠️ 有怪在大鸟旁！赶走才能骑上去');
                 }
             }
-        } else {
-            this.extractStandT = Math.max(0, this.extractStandT - dt * 3);
         }
+        this._updateMountButton();
         this._renderExtractChip();
     }
+
+    // 屏幕底部"骑上大鸟"大按钮（触屏点 / 桌面也可点；桌面还可按 E）
+    _updateMountButton() {
+        if (!this._mountBtn) {
+            const btn = document.createElement('div');
+            btn.id = 'mount-bird-btn';
+            Object.assign(btn.style, {
+                position: 'fixed', left: '50%', bottom: '120px',
+                transform: 'translateX(-50%)', padding: '16px 34px',
+                background: 'linear-gradient(90deg, #b07cff, #ffd700)',
+                color: '#fff', fontSize: '24px', fontWeight: 'bold',
+                borderRadius: '999px', boxShadow: '0 6px 20px rgba(0,0,0,0.3)',
+                zIndex: '15', cursor: 'pointer', display: 'none',
+                border: '3px solid rgba(255,255,255,0.6)', userSelect: 'none',
+                animation: 'mountPulse 0.9s ease-in-out infinite',
+            });
+            if (!document.getElementById('mount-btn-kf')) {
+                const st = document.createElement('style');
+                st.id = 'mount-btn-kf';
+                st.textContent = '@keyframes mountPulse{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.07)}}';
+                document.head.appendChild(st);
+            }
+            const go = (e) => { e.preventDefault(); e.stopPropagation(); this._ensureAudio(); this._mountBird(); };
+            btn.addEventListener('click', go);
+            btn.addEventListener('touchstart', go, { passive: false });
+            document.body.appendChild(btn);
+            this._mountBtn = btn;
+        }
+        const show = this._canMount && !this._extractMounted;
+        if (show) {
+            const isTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+            this._mountBtn.textContent = isTouch ? '🦅 骑上大鸟' : '🦅 骑上大鸟（按 E）';
+        }
+        this._mountBtn.style.display = show ? 'block' : 'none';
+    }
+
+    _mountBird() {
+        if (!this._canMount || this._extractMounted) return;
+        if (this.extractPhase !== 'open' || this._birdState !== 'landed') return;
+        this._extractMounted = true;
+        this._canMount = false;
+        if (this._mountBtn) this._mountBtn.style.display = 'none';
+        this.velocity.x = 0; this.velocity.z = 0; this.playerVy = 0;
+        this._tone(720, 0.25, 'sine', 0.08);
+        this._tone(960, 0.35, 'sine', 0.06, 0.12);
+        this._showEasterBadge('🦅 坐稳啦！大鸟带你飞回家～');
+        this._startBirdLeave(true);   // 驮着宝藏（和玩家）起飞
+    }
+
+    // 起飞动画结束时结算这趟撤离
+    _finishMountedExtraction() {
+        this._extractMounted = false;
+        // 把玩家放回魔法阵旁边的地面
+        const gy = PLAYER_RADIUS * (this.player.scale.x || 1);
+        this.player.position.set(this.extractCenter.x, gy, this.extractCenter.z + 4);
+        this.velocity.x = 0; this.velocity.z = 0; this.playerVy = 0;
+        this._bankExtraction();
+    }
+
 
     _renderExtractChip() {
         if (!this._extractChip) return;
         const goalTxt = `🏦 ${this.bankedTotal.toLocaleString()}/${this.extractWinGoal.toLocaleString()}`;
-        if (this.extractPhase === 'closed') {
-            this._extractChip.innerHTML = `🦅 大鸟 <b>${Math.ceil(this.extractPhaseTimer)}s</b> 后到 · ${goalTxt}`;
+        if (this._extractMounted) {
+            this._extractChip.innerHTML = `🦅 起飞！带着宝藏飞回家～`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #b07cff, #ffd700)';
+        } else if (this.extractPhase === 'closed') {
+            this._extractChip.innerHTML = `🦅 大鸟 <b>${Math.ceil(this.extractPhaseTimer)}s</b> 后到 · 阵门紧锁 · ${goalTxt}`;
             this._extractChip.style.background = 'rgba(0, 0, 0, 0.45)';
-        } else if (this.extractStandT > 0.05) {
-            const remain = Math.max(0, this.extractStandNeed - this.extractStandT);
-            this._extractChip.innerHTML = `🦅 起飞准备 <b>${remain.toFixed(1)}s</b> · 别离开魔法阵！`;
+        } else if (this._canMount) {
+            this._extractChip.innerHTML = `🦅 走到大鸟旁，骑上去飞走！（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
             this._extractChip.style.background = 'linear-gradient(90deg, #b07cff, #ffd700)';
         } else if (this._extractMonsterBlocking) {
             this._extractChip.innerHTML = `⚠️ 先赶走怪 · 大鸟还等 <b>${Math.ceil(this.extractPhaseTimer)}s</b>`;
             this._extractChip.style.background = 'linear-gradient(90deg, #ff6b6b, #ffb84d)';
         } else {
-            this._extractChip.innerHTML = `🦅 大鸟来了！快站进魔法阵（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
+            this._extractChip.innerHTML = `🦅 大鸟来了！快跑向它骑上去（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
             this._extractChip.style.background = 'rgba(176, 124, 255, 0.55)';
         }
     }
@@ -4690,7 +4804,7 @@ export class Game3D {
         this._tone(1320, 0.6, 'sine', 0.05, 0.30);
     }
 
-    _triggerExtraction() {
+    _bankExtraction() {
         const earned = this.carriedValue;
         this.bankedTotal += earned;
         this._extractCount++;
@@ -4699,8 +4813,6 @@ export class Game3D {
         this._renderTreasureChip();
         this._unlockAchievement('first_extract');
         if (this._extractCount >= 3) this._unlockAchievement('three_extract');
-        // 大鸟驮着宝藏飞走
-        this._startBirdLeave(true);
         this._launchFirework();
         this._launchFirework();
         this._playWin();
@@ -8221,7 +8333,11 @@ export class Game3D {
             // 彩蛋：Konami 输入序列追踪
             if (this._konamiSeq) this._onKonamiKey(e.code);
             // 互动键
-            if (e.code === 'KeyE') { e.preventDefault(); this._doWatering(); }
+            if (e.code === 'KeyE') {
+                e.preventDefault();
+                if (this._canMount && !this._extractMounted) this._mountBird();
+                else this._doWatering();
+            }
             if (e.code === 'KeyF') { e.preventDefault(); this._toggleFishing(); }
             if (e.code === 'KeyM') { e.preventDefault(); this._toggleBGM(); }
             if (e.code === 'KeyJ') { e.preventDefault(); this._doMeleeAttack(); }
@@ -8367,7 +8483,7 @@ export class Game3D {
     _tick() {
         const dt = Math.min(this.clock.getDelta(), 0.05);
 
-        if (!this.won && !this.dying) {
+        if (!this.won && !this.dying && !this._extractMounted) {
             this._updatePlayer(dt);
             this._resolveObstacleCollisions();
             this._checkSpikes();
@@ -8809,7 +8925,7 @@ export class Game3D {
         document.removeEventListener('mousemove', this._onMouseMove);
         if (document.pointerLockElement) document.exitPointerLock?.();
         // 清掉自建的 DOM 浮层 + 待触发定时器，避免重开后叠屏 / 野回调访问已销毁实例
-        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl, this._touchUI]
+        [this._questChip, this._feelChip, this._tintEl, this._easterEl, this._dmgOverlay, this._winEl, this._touchUI, this._mountBtn]
             .forEach(el => el && el.remove());
         [this._easterTimer, this._feelTimer].forEach(t => clearTimeout(t));
         this.scene.traverse(obj => {
