@@ -2295,10 +2295,9 @@ export class Game3D {
     }
 
     _buildSnowmen() {
+        // 雪人只该出现在有雪的地方：永驻雪人由 _buildSnowBiome 在雪原里加（推进 this.snowmen）。
+        // 这里只初始化数组；不再往绿草村庄放"雪天才显形"的雪人——草地上立雪人不合理。
         this.snowmen = [];
-        // 2 个雪人（默认隐藏，雪天显形）
-        const positions = [{ x: 9, z: 6 }, { x: -8, z: 8 }];
-        positions.forEach(p => this._addSnowman(p.x, p.z));
     }
 
     _addSnowman(x, z) {
