@@ -50,7 +50,7 @@ await page.evaluate(() => {
     const front = (mx, my, mz, dist, h, ty) => ({ cx: mx, cy: my + h, cz: mz - dist, tx: mx, ty: my + ty, tz: mz });
     const mon = (t) => { const m = g.monsters.find(x => x.type === t && x.state === 'alive'); return m ? m.group.position : null; };
     const T = {};
-    const p = g.player.position; T.player = front(p.x, 0, p.z, 2.8, 1.0, 0.9);
+    const p = g.player.position; T.player = front(p.x, 0, p.z, 2.1, 0.95, 0.95);
     const dist = { normal: 1.8, fast: 2.2, tank: 2.6, mimic: 2.0 };
     for (const t of ['normal', 'fast', 'tank', 'mimic']) {
         const pos = mon(t);

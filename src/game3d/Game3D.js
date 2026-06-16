@@ -8461,6 +8461,10 @@ export class Game3D {
             const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.55, 12, 12), pupilMat);
             pupil.position.set(sx * headR * 0.36, headY + headR * 0.12, -headR * 0.96);
             this.animRoot.add(pupil);
+            // 高光小白点：主角眼睛有神、活泼，跟怪物的死眼区分开
+            const shine = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.22, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            shine.position.set(sx * headR * 0.36 - headR * 0.07, headY + headR * 0.2, -headR * 1.04);
+            this.animRoot.add(shine);
         }
 
         // ===== 腮红 =====
@@ -8481,6 +8485,39 @@ export class Game3D {
 
         // ===== 头顶装饰 =====
         this._addAccessory(this.style.accessory, headTop, headR);
+
+        // ===== 主角专属：小探险家行头（怪物都没有，一眼分清"我"是好人）=====
+        const scarfHex = 0x18b6c9;   // 青绿围巾：跟蛋身（多半暖色）形成强对比，远处也跳出来
+        const bagHex = 0x8a5a2e, bagDark = darkenHex(0x8a5a2e, 0.7);
+        // 围巾：脖子一圈 + 一条会飘的尾巴
+        const neckY = r * 1.18;
+        const collar = new THREE.Mesh(new THREE.TorusGeometry(r * 0.34, r * 0.1, 8, 18), new THREE.MeshToonMaterial({ color: scarfHex }));
+        collar.rotation.x = Math.PI / 2;
+        collar.position.y = neckY;
+        addOutline(collar, 0.05);
+        this.animRoot.add(collar);
+        const tailPivot = new THREE.Group();
+        tailPivot.position.set(r * 0.2, neckY, r * 0.18);   // 挂在右后侧
+        const tail = new THREE.Mesh(new THREE.BoxGeometry(r * 0.16, r * 0.55, r * 0.05), new THREE.MeshToonMaterial({ color: scarfHex }));
+        tail.position.y = -r * 0.26;
+        addOutline(tail, 0.05);
+        tailPivot.add(tail);
+        this.animRoot.add(tailPivot);
+        this._scarfTail = tailPivot;
+        // 斜挎探险包：一条斜跨胸前的背带 + 腰侧小皮包
+        const strap = new THREE.Mesh(new THREE.TorusGeometry(r * 0.5, r * 0.045, 6, 24), new THREE.MeshToonMaterial({ color: bagDark }));
+        strap.position.set(0, r * 0.95, 0);
+        strap.rotation.x = Math.PI / 2;
+        strap.rotation.y = 0.5;
+        strap.scale.set(1, 0.78, 1);
+        this.animRoot.add(strap);
+        const pouch = new THREE.Mesh(new THREE.BoxGeometry(r * 0.4, r * 0.34, r * 0.22), new THREE.MeshToonMaterial({ color: bagHex }));
+        pouch.position.set(-r * 0.5, r * 0.72, r * 0.05);   // 左腰
+        addOutline(pouch, 0.05);
+        this.animRoot.add(pouch);
+        const flap = new THREE.Mesh(new THREE.BoxGeometry(r * 0.42, r * 0.16, r * 0.24), new THREE.MeshToonMaterial({ color: bagDark }));
+        flap.position.set(-r * 0.5, r * 0.86, r * 0.05);
+        this.animRoot.add(flap);
 
         // 动画状态
         this._animScaleXZ = 1;
@@ -9020,6 +9057,13 @@ export class Game3D {
                 else target = Math.sin(t * 1.8) * 0.06;             // 待机轻摆
                 a.sh.rotation.x = approach(a.sh.rotation.x, target, 12 * dt);
             }
+        }
+        // 围巾尾巴飘：走动/腾空甩得欢，待机微飘
+        if (this._scarfTail) {
+            const amp = inAir ? 0.9 : (walking ? 0.55 : 0.18);
+            const spd = inAir ? 9 : (walking ? 13 : 2.2);
+            this._scarfTail.rotation.x = -0.3 + Math.sin(t * spd) * amp;
+            this._scarfTail.rotation.z = Math.sin(t * spd * 0.7 + 1) * amp * 0.5;
         }
     }
 
