@@ -7,6 +7,12 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { loadStyle, hexToInt } from './style';
 
+// 进入提速：全部用卡通材质，不用 PBR(MeshStandardMaterial)。PBR 着色器体积大，在集显上编译
+// 极慢——实测它一类就占了进入编译时间的一大半(进入 46s→15s,约 3 倍)。游戏本就是卡通分层光影
+// 风格,改成 toon 视觉几乎无差(只是冰面/水面/玻璃少一点高光反射),换来进入大幅提速。
+// toon 同样支持 color/map/emissive/transparent,metalness/roughness 等参数被忽略不报错。
+const STD_MAT = THREE.MeshToonMaterial;
+
 // 怪物种类：普通紫幽灵 / 快速小怪 / 笨重大怪 / 假宝箱变的咬人怪
 const MONSTER_TYPES = {
     normal: { r: 0.40, color: 0x8050a0, hp: 3, speed: 3.5, dmg: 1, knock: 6,  aggro: 10, drop: 0,    label: '幽灵' },
@@ -509,7 +515,7 @@ export class Game3D {
         // 烟花/拾取星（MeshStandardMaterial + emissive）
         addDummy(new THREE.Mesh(
             new THREE.OctahedronGeometry(0.22),
-            new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.5 })
+            new STD_MAT({ color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.5 })
         ));
         // 脚印（CircleGeometry transparent）
         const fp = new THREE.Mesh(
@@ -521,7 +527,7 @@ export class Game3D {
         // 流星头/尾
         addDummy(new THREE.Mesh(
             new THREE.SphereGeometry(0.4, 12, 10),
-            new THREE.MeshStandardMaterial({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
+            new STD_MAT({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
         ));
 
         let cleaned = false;
@@ -1031,7 +1037,7 @@ export class Game3D {
         group.add(chimney); fadeables.push(chimney);
 
         // 侧墙发光窗（夜里有光，bloom 抓得到）
-        const winMat = new THREE.MeshStandardMaterial({
+        const winMat = new STD_MAT({
             color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 0.95,
         });
         for (const sx of [-1, 1]) {
@@ -1081,7 +1087,7 @@ export class Game3D {
         group.add(candle);
         const flame = new THREE.Mesh(
             new THREE.SphereGeometry(0.05, 8, 6),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xffaa44, emissive: 0xffaa44, emissiveIntensity: 2.5,
             })
         );
@@ -1230,7 +1236,7 @@ export class Game3D {
         group.add(arm);
         const lantern = new THREE.Mesh(
             new THREE.CylinderGeometry(0.13, 0.16, 0.34, 8),
-            new THREE.MeshStandardMaterial({ color: 0xffe7a8, emissive: 0xffcf6a, emissiveIntensity: 0.9 })
+            new STD_MAT({ color: 0xffe7a8, emissive: 0xffcf6a, emissiveIntensity: 0.9 })
         );
         lantern.position.set(doorW / 2 + 0.55, doorH - 0.35, D / 2 + 0.1);
         group.add(lantern);
@@ -1482,7 +1488,7 @@ export class Game3D {
         for (let i = 0; i < 28; i++) {
             const body = new THREE.Mesh(
                 new THREE.SphereGeometry(0.08, 6, 6),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0xeaff66, emissive: 0xeaff66, emissiveIntensity: 2.5,
                 })
             );
@@ -1786,7 +1792,7 @@ export class Game3D {
         // 灯泡（夜里发光）
         const bulb = new THREE.Mesh(
             new THREE.SphereGeometry(0.13, 12, 10),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xfff099, emissive: 0xfff099, emissiveIntensity: 0,
             })
         );
@@ -1845,7 +1851,7 @@ export class Game3D {
     }
 
     _addCollectStar(x, z) {
-        const mat = new THREE.MeshStandardMaterial({
+        const mat = new STD_MAT({
             color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.5,
         });
         const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.22), mat);
@@ -1950,7 +1956,7 @@ export class Game3D {
     _addQuestItem({ key, x, z, color, emissive, emoji, label, story }) {
         const mesh = new THREE.Mesh(
             new THREE.IcosahedronGeometry(0.55, 0),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color, emissive, emissiveIntensity: 1.3, metalness: 0.2, roughness: 0.3,
             })
         );
@@ -2238,7 +2244,7 @@ export class Game3D {
         // 火焰（发光）
         const flame = new THREE.Mesh(
             new THREE.SphereGeometry(0.18, 10, 8),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xffaa44, emissive: 0xff6622, emissiveIntensity: 2.0,
             })
         );
@@ -2453,7 +2459,7 @@ export class Game3D {
                 const lz = c.z + c.D / 2 + 0.15;
                 const bulb = new THREE.Mesh(
                     new THREE.SphereGeometry(0.07, 8, 6),
-                    new THREE.MeshStandardMaterial({
+                    new STD_MAT({
                         color: colors[i % colors.length],
                         emissive: colors[i % colors.length],
                         emissiveIntensity: 0,
@@ -2504,7 +2510,7 @@ export class Game3D {
         // 内圈水池
         const water = new THREE.Mesh(
             new THREE.CylinderGeometry(1.15, 1.15, 0.10, 24),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0x6890c8, transparent: true, opacity: 0.85,
                 metalness: 0.1, roughness: 0.2,
             })
@@ -2546,7 +2552,7 @@ export class Game3D {
             const radius = Math.random() * 0.15;
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(0.05 + Math.random() * 0.03, 6, 4),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0x88c8e8, transparent: true, opacity: 0.85,
                 })
             );
@@ -2854,7 +2860,7 @@ export class Game3D {
         const z = (Math.random() - 0.5) * 50;
         const mesh = new THREE.Mesh(
             new THREE.SphereGeometry(0.15, 8, 6),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color, emissive: color, emissiveIntensity: 2.5,
             })
         );
@@ -2879,7 +2885,7 @@ export class Game3D {
             const vz = Math.sin(theta) * Math.cos(phi) * speed;
             const mesh = new THREE.Mesh(
                 new THREE.SphereGeometry(0.10, 6, 4),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color, emissive: color, emissiveIntensity: 2.5,
                     transparent: true, opacity: 1,
                 })
@@ -3032,7 +3038,7 @@ export class Game3D {
         // 小溪：从湖向北延伸一段细长 plane
         const stream = new THREE.Mesh(
             new THREE.PlaneGeometry(2.2, 24),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0x6890c8, transparent: true, opacity: 0.85,
                 metalness: 0.2, roughness: 0.3,
             })
@@ -3195,7 +3201,7 @@ export class Game3D {
         // 冰湖：裂纹冰面 + 微反光
         const icePond = new THREE.Mesh(
             new THREE.CircleGeometry(7, 32),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 map: makeIceTexture(),
                 metalness: 0.05, roughness: 0.45,  // 粗糙度太低会被正午太阳的镜面高光糊成一团白
             })
@@ -3366,7 +3372,7 @@ export class Game3D {
         // 仅剩的一小汪水（暗示快干了）
         const puddle = new THREE.Mesh(
             new THREE.CircleGeometry(2.4, 24),
-            new THREE.MeshStandardMaterial({ color: 0x5fb9c4, metalness: 0.1, roughness: 0.4, transparent: true, opacity: 0.85 })
+            new STD_MAT({ color: 0x5fb9c4, metalness: 0.1, roughness: 0.4, transparent: true, opacity: 0.85 })
         );
         puddle.rotation.x = -Math.PI / 2;
         puddle.position.set(oasisX, 0.06, oasisZ);
@@ -3377,7 +3383,7 @@ export class Game3D {
         // 半埋的「清泉之珠」微光（留给下次任务主线接，先做个发光暗示）
         const gem = new THREE.Mesh(
             new THREE.SphereGeometry(0.5, 16, 12),
-            new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x3399cc, emissiveIntensity: 1.2, transparent: true, opacity: 0.9 })
+            new STD_MAT({ color: 0x66e0ff, emissive: 0x3399cc, emissiveIntensity: 1.2, transparent: true, opacity: 0.9 })
         );
         gem.position.set(oasisX + 1.5, 0.2, oasisZ + 5);
         this.scene.add(gem);
@@ -3700,7 +3706,7 @@ export class Game3D {
         const side = (Math.random() - 0.5) * 0.8;
         const mesh = new THREE.Mesh(
             new THREE.SphereGeometry(0.08, 8, 6),
-            new THREE.MeshStandardMaterial({ color: 0xbfe8f5, transparent: true, opacity: 0.9 })
+            new STD_MAT({ color: 0xbfe8f5, transparent: true, opacity: 0.9 })
         );
         mesh.scale.y = 1.4;
         // 额头侧边滴落
@@ -4000,7 +4006,7 @@ export class Game3D {
         // 灯
         const lampBulb = new THREE.Mesh(
             new THREE.SphereGeometry(0.5, 16, 12),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 1.5,
             })
         );
@@ -4189,7 +4195,7 @@ export class Game3D {
         for (let i = 0; i < 12; i++) {
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(0.08 + Math.random() * 0.05, 6, 4),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0x88c8e8, transparent: true, opacity: 0.85,
                 })
             );
@@ -4291,7 +4297,7 @@ export class Game3D {
         // 头：大而亮，fog:false（夜雾不染），bloom 抓得到
         const head = new THREE.Mesh(
             new THREE.SphereGeometry(0.7, 14, 12),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xffffff, emissive: 0xfff0b0, emissiveIntensity: 4,
                 transparent: true, opacity: 1, fog: false,
             })
@@ -4452,7 +4458,7 @@ export class Game3D {
         // 发光符文环（状态指示，紫色）
         const ring = new THREE.Mesh(
             new THREE.TorusGeometry(2.4, 0.16, 8, 48),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0x5a3a8a, emissive: 0x2a1a44, emissiveIntensity: 0.3,
             })
         );
@@ -4485,7 +4491,7 @@ export class Game3D {
             group.add(pillar);
             const orb = new THREE.Mesh(
                 new THREE.OctahedronGeometry(0.22),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0x9a7ad0, emissive: 0x3a2060, emissiveIntensity: 0.3,
                 })
             );
@@ -6151,7 +6157,7 @@ export class Game3D {
             const spread = (Math.random() - 0.5) * 0.6;
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(0.06 + Math.random() * 0.03, 6, 4),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0x88c8e8, transparent: true, opacity: 0.85,
                 })
             );
@@ -6567,7 +6573,7 @@ export class Game3D {
             const ang = (i / 3) * Math.PI * 2;
             const coin = new THREE.Mesh(
                 new THREE.CylinderGeometry(0.18, 0.18, 0.06, 16),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 1.0,
                     metalness: 0.8, roughness: 0.3,
                 })
@@ -6643,7 +6649,7 @@ export class Game3D {
         for (let i = 0; i < 5; i++) {
             const coin = new THREE.Mesh(
                 new THREE.CylinderGeometry(0.25, 0.25, 0.08, 18),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 0.8,
                     metalness: 0.8, roughness: 0.3,
                 })
@@ -6657,7 +6663,7 @@ export class Game3D {
         for (let i = 0; i < 4; i++) {
             const coin = new THREE.Mesh(
                 new THREE.CylinderGeometry(0.18, 0.18, 0.05, 16),
-                new THREE.MeshStandardMaterial({
+                new STD_MAT({
                     color: 0xffd700, emissive: 0xffd700, emissiveIntensity: 0.8,
                 })
             );
@@ -6669,7 +6675,7 @@ export class Game3D {
         // 发光小精灵（emissive 球+点光）
         const sprite = new THREE.Mesh(
             new THREE.SphereGeometry(0.20, 14, 10),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xc060ff, emissive: 0xc060ff, emissiveIntensity: 2.5,
             })
         );
@@ -6906,7 +6912,7 @@ export class Game3D {
         // 中间挂个发光吊灯
         const chand = new THREE.Mesh(
             new THREE.SphereGeometry(0.35, 16, 12),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xfff1c8, emissive: 0xffd066, emissiveIntensity: 1.8,
             })
         );
@@ -7389,7 +7395,7 @@ export class Game3D {
         this._snowSpriteHalo = halo;
         const body = new THREE.Mesh(
             new THREE.SphereGeometry(0.62, 20, 16),
-            new THREE.MeshStandardMaterial({
+            new STD_MAT({
                 color: 0xbfe4ff, emissive: 0x77c8ff, emissiveIntensity: 1.1,
                 transparent: true, opacity: 0.92,
             })
@@ -7479,7 +7485,7 @@ export class Game3D {
         const ox = -30, oz = 116;  // 与 _buildDesertBiome 的 oasisX/oasisZ 一致
         const pond = new THREE.Mesh(
             new THREE.CircleGeometry(6, 32),
-            new THREE.MeshStandardMaterial({ color: 0x4fc4d8, metalness: 0.1, roughness: 0.35, transparent: true, opacity: 0 })
+            new STD_MAT({ color: 0x4fc4d8, metalness: 0.1, roughness: 0.35, transparent: true, opacity: 0 })
         );
         pond.rotation.x = -Math.PI / 2;
         pond.position.set(ox, 0.07, oz);
