@@ -23,6 +23,12 @@ function darkenHex(hex, factor = 0.45) {
     const b = Math.round((hex & 0xff) * factor);
     return (r << 16) | (g << 8) | b;
 }
+function lightenHex(hex, amt = 0.4) {
+    const r = Math.round(((hex >> 16) & 0xff) + (255 - ((hex >> 16) & 0xff)) * amt);
+    const g = Math.round(((hex >> 8) & 0xff) + (255 - ((hex >> 8) & 0xff)) * amt);
+    const b = Math.round((hex & 0xff) + (255 - (hex & 0xff)) * amt);
+    return (r << 16) | (g << 8) | b;
+}
 function addOutline(mesh, thickness = OUTLINE_THICK, sourceColor = null) {
     let color;
     if (sourceColor != null) {
@@ -5244,61 +5250,212 @@ export class Game3D {
         spots.forEach(s => this._addMonster(s.x, s.z, s.type));
     }
 
+    // 通用大眼睛（白眼球+黑瞳，可选怒眉）；正前方 = -z
+    _monsterEyes(group, r, opt = {}) {
+        const { y = r * 1.4, z = -r * 0.8, dx = r * 0.32, eyeR = r * 0.18, angry = false } = opt;
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            eye.position.set(sx * dx, y, z);
+            group.add(eye);
+            const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.55, 8, 6), new THREE.MeshBasicMaterial({ color: 0x1a0a1a }));
+            pupil.position.set(sx * dx, y, z - eyeR * 0.7);
+            group.add(pupil);
+            if (angry) {
+                const brow = new THREE.Mesh(new THREE.BoxGeometry(eyeR * 1.7, eyeR * 0.5, eyeR * 0.5), new THREE.MeshToonMaterial({ color: 0x1a1a1a }));
+                brow.position.set(sx * dx, y + eyeR * 1.05, z - eyeR * 0.2);
+                brow.rotation.z = sx * 0.5;
+                group.add(brow);
+            }
+        }
+    }
+
+    // 幽灵：圆顶身 + 飘逸波浪下摆 + 飘手，半透明
+    _buildGhostMonster(group, r, color) {
+        const mat = new THREE.MeshToonMaterial({ color, transparent: true, opacity: 0.9 });
+        const bodyGeo = new THREE.SphereGeometry(r, 20, 16);
+        bodyGeo.scale(1, 1.2, 1);
+        bodyGeo.translate(0, r * 1.05, 0);
+        const body = new THREE.Mesh(bodyGeo, mat);
+        body.castShadow = true;
+        addOutline(body, 0.05);
+        group.add(body);
+        // 波浪下摆（一圈小球）
+        for (let i = 0; i < 5; i++) {
+            const ang = (i / 5) * Math.PI * 2;
+            const bump = new THREE.Mesh(new THREE.SphereGeometry(r * 0.32, 10, 8), mat);
+            bump.position.set(Math.cos(ang) * r * 0.62, r * 0.2, Math.sin(ang) * r * 0.62);
+            group.add(bump);
+        }
+        // 两只飘起来的小手
+        for (const sx of [-1, 1]) {
+            const arm = new THREE.Mesh(new THREE.SphereGeometry(r * 0.2, 8, 6), mat);
+            arm.scale.set(1.5, 0.7, 0.7);
+            arm.position.set(sx * r * 0.95, r * 0.95, 0);
+            group.add(arm);
+        }
+        this._monsterEyes(group, r, { y: r * 1.42, z: -r * 0.78, dx: r * 0.32, eyeR: r * 0.2 });
+        const fang = new THREE.Mesh(new THREE.ConeGeometry(r * 0.1, r * 0.26, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        fang.position.set(0, r * 1.02, -r * 0.8);
+        fang.rotation.x = Math.PI;
+        group.add(fang);
+        return body;
+    }
+
+    // 飞蝠：小圆身 + 尖耳 + 大蝙蝠翼（会扇）+ 小尖牙
+    _buildBatMonster(group, r, color) {
+        const mat = new THREE.MeshToonMaterial({ color });
+        const body = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), mat);
+        body.scale.set(1, 1.05, 1);
+        body.position.y = r * 1.15;
+        body.castShadow = true;
+        addOutline(body, 0.05);
+        group.add(body);
+        // 尖耳
+        for (const sx of [-1, 1]) {
+            const ear = new THREE.Mesh(new THREE.ConeGeometry(r * 0.3, r * 0.6, 4), mat);
+            ear.position.set(sx * r * 0.42, r * 1.95, 0);
+            addOutline(ear, 0.05);
+            group.add(ear);
+        }
+        // 蝙蝠翼：带缺口的膜 + 两根指骨，水平展开，rotation.y 扇动
+        const wingMat = new THREE.MeshToonMaterial({ color: darkenHex(color, 0.65), side: THREE.DoubleSide });
+        const boneMat = new THREE.MeshToonMaterial({ color: darkenHex(color, 0.45) });
+        const wings = [];
+        for (const sx of [-1, 1]) {
+            const wing = new THREE.Group();
+            wing.position.set(sx * r * 0.6, r * 1.2, 0);
+            wing.scale.x = sx;   // 左翼镜像
+            const shape = new THREE.Shape();
+            shape.moveTo(0, r * 0.35);
+            shape.lineTo(r * 2.3, r * 0.55);
+            shape.quadraticCurveTo(r * 1.85, r * 0.05, r * 1.7, r * 0.15);
+            shape.quadraticCurveTo(r * 1.45, r * -0.35, r * 1.25, r * -0.1);
+            shape.quadraticCurveTo(r * 0.95, r * -0.55, r * 0.8, r * -0.25);
+            shape.quadraticCurveTo(r * 0.45, r * -0.55, 0, r * -0.45);
+            shape.lineTo(0, r * 0.35);
+            const membrane = new THREE.Mesh(new THREE.ShapeGeometry(shape), wingMat);
+            membrane.rotation.x = -Math.PI / 2;   // XY→XZ，平铺
+            wing.add(membrane);
+            for (const bz of [0.15, 0.9]) {
+                const bone = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.04, r * 0.04, r * 2.0, 5), boneMat);
+                bone.rotation.z = Math.PI / 2;
+                bone.position.set(r * 1.0, 0, bz * 0);
+                bone.rotation.y = bz;
+                wing.add(bone);
+            }
+            group.add(wing);
+            wings.push(wing);
+        }
+        this._monsterEyes(group, r, { y: r * 1.25, z: -r * 0.8, dx: r * 0.3, eyeR: r * 0.22 });
+        for (const sx of [-1, 1]) {
+            const fang = new THREE.Mesh(new THREE.ConeGeometry(r * 0.09, r * 0.24, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            fang.position.set(sx * r * 0.18, r * 0.92, -r * 0.78);
+            fang.rotation.x = Math.PI;
+            group.add(fang);
+        }
+        return { body, wings };
+    }
+
+    // 巨怪胖墩：矮胖大身 + 粗腿 + 大拳头 + 犄角 + 怒眼 + 一排獠牙
+    _buildBruteMonster(group, r, color) {
+        const mat = new THREE.MeshToonMaterial({ color });
+        const body = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16), mat);
+        body.scale.set(1.15, 0.92, 1.05);
+        body.position.y = r * 0.95;
+        body.castShadow = true;
+        addOutline(body, 0.05);
+        group.add(body);
+        for (const sx of [-1, 1]) {
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.28, r * 0.3, r * 0.4, 8), mat);
+            leg.position.set(sx * r * 0.45, r * 0.22, 0);
+            addOutline(leg, 0.05);
+            group.add(leg);
+            const fist = new THREE.Mesh(new THREE.SphereGeometry(r * 0.38, 12, 10), mat);
+            fist.position.set(sx * r * 1.18, r * 0.78, -r * 0.25);
+            addOutline(fist, 0.05);
+            group.add(fist);
+            const horn = new THREE.Mesh(new THREE.ConeGeometry(r * 0.18, r * 0.6, 6), new THREE.MeshToonMaterial({ color: darkenHex(color, 0.5) }));
+            horn.position.set(sx * r * 0.55, r * 1.62, -r * 0.05);
+            horn.rotation.z = sx * -0.42;
+            addOutline(horn, 0.05);
+            group.add(horn);
+        }
+        this._monsterEyes(group, r, { y: r * 1.1, z: -r * 0.92, dx: r * 0.34, eyeR: r * 0.16, angry: true });
+        const fangMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        for (let f = 0; f < 5; f++) {
+            const fang = new THREE.Mesh(new THREE.ConeGeometry(r * 0.1, r * 0.26, 4), fangMat);
+            fang.position.set((f / 4 - 0.5) * r * 1.0, r * 0.66, -r * 0.92);
+            fang.rotation.x = Math.PI;
+            group.add(fang);
+        }
+        return body;
+    }
+
+    // 木箱咬人怪：箱体 + 掀开的盖 + 上下獠牙 + 红舌 + 怒眼 + 小短腿
+    _buildBoxMonster(group, r, color) {
+        const woodMat = new THREE.MeshToonMaterial({ color });
+        const darkWood = new THREE.MeshToonMaterial({ color: darkenHex(color, 0.65) });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(r * 1.7, r * 1.3, r * 1.6), woodMat);
+        body.position.y = r * 0.85;
+        body.castShadow = true;
+        addOutline(body, 0.04);
+        group.add(body);
+        // 前脸黑口
+        const maw = new THREE.Mesh(new THREE.BoxGeometry(r * 1.45, r * 0.85, r * 0.25), new THREE.MeshBasicMaterial({ color: 0x180a06 }));
+        maw.position.set(0, r * 0.85, -r * 0.72);
+        group.add(maw);
+        // 掀开的盖子（铰在后上沿，向后翻）
+        const lidGeo = new THREE.BoxGeometry(r * 1.7, r * 0.18, r * 1.6);
+        lidGeo.translate(0, 0, r * 0.8);   // 锚点移到后沿
+        const lid = new THREE.Mesh(lidGeo, woodMat);
+        lid.position.set(0, r * 1.5, r * 0.8);
+        lid.rotation.x = 0.85;
+        addOutline(lid, 0.04);
+        group.add(lid);
+        // 上下獠牙
+        const fangMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        for (let f = 0; f < 5; f++) {
+            const ox = (f / 4 - 0.5) * r * 1.25;
+            const top = new THREE.Mesh(new THREE.ConeGeometry(r * 0.12, r * 0.32, 4), fangMat);
+            top.position.set(ox, r * 1.12, -r * 0.74); top.rotation.x = Math.PI;
+            group.add(top);
+            const bot = new THREE.Mesh(new THREE.ConeGeometry(r * 0.12, r * 0.32, 4), fangMat);
+            bot.position.set(ox, r * 0.58, -r * 0.74);
+            group.add(bot);
+        }
+        // 红舌
+        const tongue = new THREE.Mesh(new THREE.SphereGeometry(r * 0.4, 10, 8), new THREE.MeshToonMaterial({ color: 0xd84a6a }));
+        tongue.scale.set(0.7, 0.3, 0.6);
+        tongue.position.set(0, r * 0.7, -r * 0.6);
+        group.add(tongue);
+        // 怒眼（箱体前脸、大口上方）
+        this._monsterEyes(group, r, { y: r * 1.4, z: -r * 0.82, dx: r * 0.42, eyeR: r * 0.19, angry: true });
+        // 小短腿
+        for (const sx of [-1, 1]) {
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.13, r * 0.13, r * 0.3, 6), darkWood);
+            leg.position.set(sx * r * 0.5, r * 0.06, r * 0.1);
+            group.add(leg);
+        }
+        return body;
+    }
+
     _addMonster(x, z, type = 'normal') {
         const cfg = MONSTER_TYPES[type] || MONSTER_TYPES.normal;
         const group = new THREE.Group();
         const r = cfg.r;
         const isMimic = type === 'mimic';
-        // 身体：幽灵类用半透明蛋身；咬人箱用不透明木色蛋身（像箱子站起来）
-        const bodyGeo = new THREE.SphereGeometry(r, 20, 16);
-        bodyGeo.scale(1, 1.2, 1);
-        bodyGeo.translate(0, r * 1.2, 0);
-        const body = new THREE.Mesh(
-            bodyGeo,
-            new THREE.MeshToonMaterial({
-                color: cfg.color, transparent: !isMimic, opacity: isMimic ? 1 : 0.92,
-            })
-        );
-        body.castShadow = true;
-        addOutline(body, 0.05);
-        group.add(body);
-        // 大圆眼（白+黑）
-        for (const sx of [-1, 1]) {
-            const eye = new THREE.Mesh(
-                new THREE.SphereGeometry(r * 0.18, 10, 8),
-                new THREE.MeshBasicMaterial({ color: 0xffffff })
-            );
-            eye.position.set(sx * r * 0.3, r * 1.55, -r * 0.78);
-            group.add(eye);
-            const pupil = new THREE.Mesh(
-                new THREE.SphereGeometry(r * 0.10, 8, 6),
-                new THREE.MeshBasicMaterial({ color: 0x1a0a1a })
-            );
-            pupil.position.set(sx * r * 0.3, r * 1.55, -r * 0.92);
-            group.add(pupil);
-        }
-        // 牙：普通一颗小尖牙；咬人箱/大怪用一排锯齿（更凶）
-        const fangCount = (isMimic || type === 'tank') ? 5 : 1;
-        const fangMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        for (let f = 0; f < fangCount; f++) {
-            const fang = new THREE.Mesh(new THREE.ConeGeometry(r * 0.1, r * 0.26, 4), fangMat);
-            const off = fangCount === 1 ? 0 : (f / (fangCount - 1) - 0.5) * r * 1.1;
-            fang.position.set(off, r * 1.02, -r * 0.82);
-            fang.rotation.x = Math.PI;
-            group.add(fang);
-        }
-        // 快怪加一对小翅膀（视觉区分）
+        // 四种怪各有各的轮廓：幽灵 / 飞蝠 / 巨怪胖墩 / 木箱咬人怪
+        let body, wings = null;
         if (type === 'fast') {
-            const wingMat = new THREE.MeshToonMaterial({ color: 0xffd0dc, side: THREE.DoubleSide });
-            for (const sx of [-1, 1]) {
-                const wing = new THREE.Mesh(new THREE.CircleGeometry(r * 0.7, 8, 0, Math.PI), wingMat);
-                wing.position.set(sx * r * 0.9, r * 1.3, 0);
-                wing.rotation.y = sx * 0.6;
-                group.add(wing);
-                m_wing(group, wing);
-            }
+            const built = this._buildBatMonster(group, r, cfg.color);
+            body = built.body; wings = built.wings;
+        } else if (type === 'tank') {
+            body = this._buildBruteMonster(group, r, cfg.color);
+        } else if (isMimic) {
+            body = this._buildBoxMonster(group, r, cfg.color);
+        } else {
+            body = this._buildGhostMonster(group, r, cfg.color);
         }
-        function m_wing(g, w) { (g.userData.wings = g.userData.wings || []).push(w); }
 
         // 头顶 HP bar
         const hpCv = document.createElement('canvas');
@@ -5320,7 +5477,7 @@ export class Game3D {
             home: new THREE.Vector3(x, 0, z),
             hp: cfg.hp, maxHp: cfg.hp,
             speed: cfg.speed, dmg: cfg.dmg, knock: cfg.knock, aggro: cfg.aggro, drop: cfg.drop,
-            wings: group.userData.wings || null,
+            wings,
             state: 'alive',
             respawnT: 0,
             attackCD: 0,
@@ -8134,16 +8291,72 @@ export class Game3D {
         const r = PLAYER_RADIUS;
         const bodyColor = hexToInt(this.style.bodyColor);
         const eyeColor = hexToInt(this.style.eyeColor);
+        const skinMat = () => new THREE.MeshToonMaterial({ color: bodyColor });
+        const pantsHex = darkenHex(bodyColor, 0.62);
+        const pantsMat = () => new THREE.MeshToonMaterial({ color: pantsHex });
 
-        // ===== 蛋形身体 =====
-        // 球拉伸成蛋（Y 方向 1.25 倍）+ 几何下移让底部对齐 animRoot 原点
-        const bodyGeo = new THREE.SphereGeometry(r, 32, 32);
-        bodyGeo.scale(1, 1.25, 1);
-        bodyGeo.translate(0, r * 1.25, 0);
-        const body = new THREE.Mesh(
-            bodyGeo,
-            new THREE.MeshToonMaterial({ color: bodyColor })
+        // 蛋头小人：蛋当脑袋（身份主体），下面接小身体 + 小手小脚，走路像个小朋友
+        const headR = r * 0.72;
+        const headY = r * 1.62;                 // 蛋头中心高度
+        const headTop = headY + headR * 1.22;   // 蛋头顶（配饰锚点）
+
+        // ===== 小身体（躯干，蛋色 + 前面一块浅色肚兜）=====
+        const torso = new THREE.Mesh(new THREE.SphereGeometry(r * 0.46, 18, 14), skinMat());
+        torso.scale.set(1.0, 1.05, 0.92);
+        torso.position.y = r * 0.92;
+        torso.castShadow = true;
+        addOutline(torso, 0.05);
+        this.animRoot.add(torso);
+        const belly = new THREE.Mesh(
+            new THREE.CircleGeometry(r * 0.26, 18),
+            new THREE.MeshToonMaterial({ color: lightenHex(bodyColor, 0.5) })
         );
+        belly.position.set(0, r * 0.9, -r * 0.43);
+        belly.lookAt(0, r * 0.9, -r * 5);
+        this.animRoot.add(belly);
+
+        // ===== 两条小腿（带小脚，会迈步）=====
+        this._legs = [];
+        for (const sx of [-1, 1]) {
+            const hip = new THREE.Group();
+            hip.position.set(sx * r * 0.2, r * 0.52, 0);
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.13, r * 0.12, r * 0.5, 8), pantsMat());
+            leg.position.y = -r * 0.25;
+            leg.castShadow = true;
+            addOutline(leg, 0.05);
+            hip.add(leg);
+            const foot = new THREE.Mesh(new THREE.SphereGeometry(r * 0.16, 10, 8), pantsMat());
+            foot.scale.set(1, 0.7, 1.4);
+            foot.position.set(0, -r * 0.5, -r * 0.08);
+            addOutline(foot, 0.05);
+            hip.add(foot);
+            this.animRoot.add(hip);
+            this._legs.push({ hip, sx });
+        }
+
+        // ===== 两条小手臂（蛋色，会前后摆）=====
+        this._arms = [];
+        for (const sx of [-1, 1]) {
+            const sh = new THREE.Group();
+            sh.position.set(sx * r * 0.5, r * 1.15, 0);
+            const arm = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.1, r * 0.09, r * 0.42, 8), skinMat());
+            arm.position.y = -r * 0.2;
+            arm.castShadow = true;
+            addOutline(arm, 0.05);
+            sh.add(arm);
+            const hand = new THREE.Mesh(new THREE.SphereGeometry(r * 0.13, 10, 8), skinMat());
+            hand.position.y = -r * 0.42;
+            addOutline(hand, 0.05);
+            sh.add(hand);
+            this.animRoot.add(sh);
+            this._arms.push({ sh, sx });
+        }
+
+        // ===== 蛋头（可换色 + 脸 + 配饰，整个角色的身份主体）=====
+        const headGeo = new THREE.SphereGeometry(headR, 32, 32);
+        headGeo.scale(1, 1.22, 1);
+        const body = new THREE.Mesh(headGeo, skinMat());
+        body.position.y = headY;
         body.castShadow = true;
         addOutline(body, 0.06);
         this.animRoot.add(body);
@@ -8152,65 +8365,57 @@ export class Game3D {
         // 雨天用的湿身颜色（压暗 25%）
         this._bodyColorWet = darkenHex(bodyColor, 0.75);
 
-        // 雨天的水珠（默认隐藏）
+        // 雨天的水珠（默认隐藏，挂在蛋头上）
         this.waterDrops = [];
         for (let i = 0; i < 6; i++) {
-            const dropR = r * 0.045 + Math.random() * r * 0.04;
+            const dropR = headR * 0.06 + Math.random() * headR * 0.05;
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(dropR, 8, 6),
-                new THREE.MeshToonMaterial({
-                    color: 0xa8d8f0, transparent: true, opacity: 0.85,
-                })
+                new THREE.MeshToonMaterial({ color: 0xa8d8f0, transparent: true, opacity: 0.85 })
             );
-            // 球面上半部随机一点（避免脸正中和底部）
             const u = Math.random() * Math.PI * 2;
             const v = Math.PI * 0.2 + Math.random() * Math.PI * 0.5;
             drop.position.set(
-                Math.sin(v) * Math.cos(u) * r * 0.95,
-                r * 1.25 + Math.cos(v) * r * 1.20,
-                Math.sin(v) * Math.sin(u) * r * 0.95
+                Math.sin(v) * Math.cos(u) * headR * 0.95,
+                headY + Math.cos(v) * headR * 1.1,
+                Math.sin(v) * Math.sin(u) * headR * 0.95
             );
             drop.visible = false;
             this.animRoot.add(drop);
             this.waterDrops.push(drop);
         }
 
-        // ===== 眼睛（蛋脸上半）=====
-        const eyeR = r * 0.22;
+        // ===== 眼睛（蛋脸上半，正前方 = -z）=====
+        const eyeR = headR * 0.26;
         const eyeWhiteMat = new THREE.MeshToonMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshToonMaterial({ color: eyeColor });
         for (const sx of [-1, 1]) {
             const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 16), eyeWhiteMat);
-            eye.position.set(sx * r * 0.32, r * 1.55, -r * 0.78);
+            eye.position.set(sx * headR * 0.36, headY + headR * 0.12, -headR * 0.82);
             this.animRoot.add(eye);
             const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.55, 12, 12), pupilMat);
-            pupil.position.set(sx * r * 0.32, r * 1.55, -r * 0.93);
+            pupil.position.set(sx * headR * 0.36, headY + headR * 0.12, -headR * 0.96);
             this.animRoot.add(pupil);
         }
 
         // ===== 腮红 =====
-        const cheekMat = new THREE.MeshBasicMaterial({
-            color: 0xff8fb8, transparent: true, opacity: 0.6
-        });
+        const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff8fb8, transparent: true, opacity: 0.6 });
         for (const sx of [-1, 1]) {
-            const cheek = new THREE.Mesh(new THREE.CircleGeometry(r * 0.18, 14), cheekMat);
-            cheek.position.set(sx * r * 0.5, r * 1.22, -r * 0.6);
-            cheek.lookAt(sx * r * 5, r * 1.22, -r * 5);
+            const cheek = new THREE.Mesh(new THREE.CircleGeometry(headR * 0.2, 14), cheekMat);
+            cheek.position.set(sx * headR * 0.56, headY - headR * 0.16, -headR * 0.66);
+            cheek.lookAt(sx * headR * 5, headY - headR * 0.16, -headR * 5);
             this.animRoot.add(cheek);
         }
 
-        // ===== 嘴（笑脸半圆环）=====
-        const mouthGeo = new THREE.TorusGeometry(r * 0.13, r * 0.02, 6, 16, Math.PI);
-        const mouth = new THREE.Mesh(
-            mouthGeo,
-            new THREE.MeshBasicMaterial({ color: 0x2c2c54 })
-        );
-        mouth.position.set(0, r * 1.05, -r * 0.86);
+        // ===== 嘴（微笑半圆环）=====
+        const mouthGeo = new THREE.TorusGeometry(headR * 0.15, headR * 0.025, 6, 16, Math.PI);
+        const mouth = new THREE.Mesh(mouthGeo, new THREE.MeshBasicMaterial({ color: 0x2c2c54 }));
+        mouth.position.set(0, headY - headR * 0.3, -headR * 0.9);
         mouth.rotation.z = Math.PI; // 翻成 U 形 = 微笑
         this.animRoot.add(mouth);
 
         // ===== 头顶装饰 =====
-        this._addAccessory(this.style.accessory, r);
+        this._addAccessory(this.style.accessory, headTop, headR);
 
         // 动画状态
         this._animScaleXZ = 1;
@@ -8221,34 +8426,33 @@ export class Game3D {
         this.scene.add(this.player);
     }
 
-    _addAccessory(type, r) {
-        // 装饰加在 animRoot 里，跟着挤压拉伸一起动；y 都基于"蛋顶在 2.5r"
-        const top = r * 2.5;
+    _addAccessory(type, top, hr) {
+        // 装饰加在 animRoot 里，跟着挤压拉伸一起动；top = 蛋头顶，hr = 蛋头半径
         if (type === 'bow') {
             const bowMat = new THREE.MeshToonMaterial({ color: 0xff3a78 });
-            const left = new THREE.Mesh(new THREE.BoxGeometry(r * 0.35, r * 0.32, r * 0.16), bowMat);
-            left.position.set(-r * 0.18, top + r * 0.05, 0);
+            const left = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
+            left.position.set(-hr * 0.26, top + hr * 0.06, 0);
             left.rotation.z = -0.25;
             left.castShadow = true;
             this.animRoot.add(left);
-            const right = new THREE.Mesh(new THREE.BoxGeometry(r * 0.35, r * 0.32, r * 0.16), bowMat);
-            right.position.set(r * 0.18, top + r * 0.05, 0);
+            const right = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
+            right.position.set(hr * 0.26, top + hr * 0.06, 0);
             right.rotation.z = 0.25;
             right.castShadow = true;
             this.animRoot.add(right);
-            const knot = new THREE.Mesh(new THREE.SphereGeometry(r * 0.11, 12, 12), bowMat);
-            knot.position.y = top + r * 0.05;
+            const knot = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 12, 12), bowMat);
+            knot.position.y = top + hr * 0.06;
             this.animRoot.add(knot);
         } else if (type === 'leaf') {
             const stemMat = new THREE.MeshToonMaterial({ color: 0x4a8a3a });
             const leafMat = new THREE.MeshToonMaterial({ color: 0x86d96a });
-            const stem = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.04, r * 0.04, r * 0.35, 8), stemMat);
-            stem.position.y = top + r * 0.12;
+            const stem = new THREE.Mesh(new THREE.CylinderGeometry(hr * 0.06, hr * 0.06, hr * 0.5, 8), stemMat);
+            stem.position.y = top + hr * 0.16;
             this.animRoot.add(stem);
             for (const sx of [-1, 1]) {
-                const leaf = new THREE.Mesh(new THREE.SphereGeometry(r * 0.18, 10, 10), leafMat);
+                const leaf = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.26, 10, 10), leafMat);
                 leaf.scale.set(0.55, 1.5, 0.55);
-                leaf.position.set(sx * r * 0.16, top + r * 0.22, 0);
+                leaf.position.set(sx * hr * 0.22, top + hr * 0.3, 0);
                 leaf.rotation.z = sx * 0.65;
                 leaf.castShadow = true;
                 this.animRoot.add(leaf);
@@ -8256,31 +8460,31 @@ export class Game3D {
         } else if (type === 'crown') {
             const crownMat = new THREE.MeshToonMaterial({ color: 0xffd700 });
             const band = new THREE.Mesh(
-                new THREE.CylinderGeometry(r * 0.55, r * 0.55, r * 0.20, 16),
+                new THREE.CylinderGeometry(hr * 0.78, hr * 0.78, hr * 0.28, 16),
                 crownMat
             );
-            band.position.y = top - r * 0.05;
+            band.position.y = top - hr * 0.04;
             band.castShadow = true;
             this.animRoot.add(band);
             for (let i = 0; i < 5; i++) {
                 const angle = (i / 5) * Math.PI * 2;
                 const cone = new THREE.Mesh(
-                    new THREE.ConeGeometry(r * 0.10, r * 0.28, 6),
+                    new THREE.ConeGeometry(hr * 0.14, hr * 0.4, 6),
                     crownMat
                 );
                 cone.position.set(
-                    Math.cos(angle) * r * 0.55,
-                    top + r * 0.18,
-                    Math.sin(angle) * r * 0.55
+                    Math.cos(angle) * hr * 0.78,
+                    top + hr * 0.22,
+                    Math.sin(angle) * hr * 0.78
                 );
                 cone.castShadow = true;
                 this.animRoot.add(cone);
             }
             const gem = new THREE.Mesh(
-                new THREE.SphereGeometry(r * 0.09, 12, 12),
+                new THREE.SphereGeometry(hr * 0.13, 12, 12),
                 new THREE.MeshToonMaterial({ color: 0xff3a78, emissive: 0x550022 })
             );
-            gem.position.set(0, top - r * 0.02, -r * 0.55);
+            gem.position.set(0, top - hr * 0.02, -hr * 0.78);
             this.animRoot.add(gem);
         }
     }
@@ -8728,6 +8932,29 @@ export class Game3D {
         this._animScaleXZ = approach(this._animScaleXZ, targetXZ, 14 * dt);
         this._animScaleY  = approach(this._animScaleY,  targetY,  14 * dt);
         this.animRoot.scale.set(this._animScaleXZ, this._animScaleY, this._animScaleXZ);
+
+        // 小手小脚走路摆动：走路时前后迈步，跳起时收腿，站立缓慢归零
+        const walking = this.onGround && vmag > 1;
+        const inAir = !this.onGround;
+        const gait = Math.sin(t * 11);
+        if (this._legs) {
+            for (const l of this._legs) {
+                let target;
+                if (inAir) target = l.sx > 0 ? 0.5 : 0.3;          // 腾空收腿
+                else if (walking) target = gait * 0.7 * l.sx;       // 左右腿反相迈步
+                else target = 0;
+                l.hip.rotation.x = approach(l.hip.rotation.x, target, 12 * dt);
+            }
+        }
+        if (this._arms) {
+            for (const a of this._arms) {
+                let target;
+                if (inAir) target = -0.9;                           // 腾空举手
+                else if (walking) target = -gait * 0.6 * a.sx;      // 与腿反向摆手
+                else target = Math.sin(t * 1.8) * 0.06;             // 待机轻摆
+                a.sh.rotation.x = approach(a.sh.rotation.x, target, 12 * dt);
+            }
+        }
     }
 
     _updateDayNight(dt) {
