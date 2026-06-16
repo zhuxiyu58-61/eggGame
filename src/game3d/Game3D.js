@@ -417,22 +417,28 @@ export class Game3D {
         this.goals = [];
 
         const _ctor0 = performance.now();
-        this._initThree();
-        this._buildWorld();
-        this._buildPlayer();
-        this._setupInput();
-        this._setupStatusUI();
+        const _perf = window.__PERF__;
+        const _t = (label, fn) => {
+            if (!_perf) return fn();
+            const a = performance.now(); const r = fn(); console.log(`[PERF] ${label} ${(performance.now() - a).toFixed(1)}ms`); return r;
+        };
+        this.__t = _t;
+        _t('initThree', () => this._initThree());
+        _t('buildWorld', () => this._buildWorld());
+        _t('buildPlayer', () => this._buildPlayer());
+        _t('setupInput', () => this._setupInput());
+        _t('setupStatusUI', () => this._setupStatusUI());
 
         this._onResize = this._onResize.bind(this);
         window.addEventListener('resize', this._onResize);
-
-        // 预编译所有 shader（消除游戏中途首次触发某材质的编译掉帧）+ 上传所有 texture
-        this._warmup();
         if (typeof window !== 'undefined') window.__ctorMs = performance.now() - _ctor0;
 
         this.clock = new THREE.Clock();
         this._tick = this._tick.bind(this);
         this.animId = requestAnimationFrame(this._tick);
+        // 着色器/纹理预热移出"进入冻结"：等首帧画面出来后再异步做（compileAsync 走后台线程，
+        // 不阻塞主线程）。进入时玩家立刻看到世界，而不是卡在捏脸界面等编译。
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (!this._destroyed) this._warmup(); }));
     }
 
     _warmup() {
@@ -471,20 +477,18 @@ export class Game3D {
             new THREE.MeshStandardMaterial({ color: 0xfff5a0, emissive: 0xfff099, emissiveIntensity: 3, transparent: true })
         ));
 
-        // 2) 预编译所有 shader：renderer.compile() 遍历整个场景编译每个材质（与相机角度无关，
-        //    一次即覆盖全部），消除游戏中途首次触发某粒子/材质时的编译掉帧。
-        //    不在这里做合成渲染——那一帧（bloom 多趟 + Reflector 湖面二次渲染 + 阴影贴图）在
-        //    弱 GPU/高 DPI 上要几百 ms 甚至数秒，且会冻结在捏脸界面。把它交给游戏循环第一帧：
-        //    玩家直接看到世界出现，而不是黑屏等待。（旧实现跑 8 次更是 8 倍冻结。）
-        const origPos = this.camera.position.clone();
-        const origRot = this.camera.rotation.clone();
-        this.camera.position.set(0, 12, 18);
-        this.camera.lookAt(0, 0, 0);
-        this.renderer.compile(this.scene, this.camera);
-        this.camera.position.copy(origPos);
-        this.camera.rotation.copy(origRot);
+        let cleaned = false;
+        const cleanup = () => {
+            if (cleaned) return; cleaned = true;
+            dummies.forEach(d => {
+                this.scene.remove(d);
+                d.geometry.dispose();
+                d.material.dispose();
+            });
+        };
 
-        // 3) 上传所有 CanvasTexture
+        // 2) 上传所有 CanvasTexture（避免游戏中首次出现某贴图时掉帧）。已在首帧之后，不冻结进入。
+        const _x0 = performance.now();
         this.scene.traverse(obj => {
             if (obj.material) {
                 const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -493,13 +497,24 @@ export class Game3D {
                 });
             }
         });
+        if (window.__PERF__) console.log(`[PERF]   warmup.initTexture ${(performance.now() - _x0).toFixed(1)}ms`);
 
-        // 4) 清掉 dummies
-        dummies.forEach(d => {
-            this.scene.remove(d);
-            d.geometry.dispose();
-            d.material.dispose();
-        });
+        // 3) 预编译所有 shader：compileAsync() 借 KHR_parallel_shader_compile 在后台线程编译，
+        //    主线程不冻结。消除游戏中途首次触发某粒子/材质时的编译掉帧。
+        //    （旧版用同步 renderer.compile()，在弱 GPU 上要近 1 秒，且卡在进入瞬间。）
+        //    dummies 必须留到 promise resolve 再清：compileAsync 在轮询这些 program 的就绪状态，
+        //    提前 dispose 会读到已销毁 program 报错。万一某 GPU 一直不 resolve，5 个 y=-100 的小
+        //    dummy 残留可忽略（destroy 时统一释放）。
+        const _c0 = performance.now();
+        if (this.renderer.compileAsync) {
+            this.renderer.compileAsync(this.scene, this.camera).then(() => {
+                if (window.__PERF__) console.log(`[PERF]   warmup.compileAsync ${(performance.now() - _c0).toFixed(1)}ms`);
+                cleanup();
+            }).catch(() => {});
+        } else {
+            this.renderer.compile(this.scene, this.camera);
+            cleanup();
+        }
     }
 
     _initThree() {
@@ -750,7 +765,7 @@ export class Game3D {
         });
 
         // 远景装饰：一圈小山
-        this._addDistantHills();
+        this.__t('addDistantHills', () => this._addDistantHills());
 
         // 散落小石头/小花/灌木 + 卡通小树 + 蝴蝶 + 云 + 鸟群 + 星空 + 天气 + 草叶
         this.flowers = [];
@@ -762,9 +777,9 @@ export class Game3D {
         this._sleepPhase = 0;
         this._sleepCooldown = 0;
         this._sleepJumped = false;
-        this._scatterDecorations();
-        this._scatterTrees();
-        this._createWindGrass();
+        this.__t('scatterDecorations', () => this._scatterDecorations());
+        this.__t('scatterTrees', () => this._scatterTrees());
+        this.__t('createWindGrass', () => this._createWindGrass());
         this._createButterflies();
         this._createSkyClouds();
         this._initBirdFlock();
@@ -778,12 +793,12 @@ export class Game3D {
         this.bunnies = [];
         this.ripples = [];
         this._rippleTimer = 0;
-        this._buildHouses();
+        this.__t('buildHouses', () => this._buildHouses());
         this._buildWindmill(-58, -22);
         this._buildSwing(-30, 36);
-        this._buildLake(48, -42);
+        this.__t('buildLake', () => this._buildLake(48, -42));
         this._initLightning();
-        this._buildNPCs();
+        this.__t('buildNPCs', () => this._buildNPCs());
         this._initAudio();
         this._initSmoke();
         this._initFireflies();
@@ -806,9 +821,9 @@ export class Game3D {
         this._buildStreamAndBridge();
         this._initWind();
         this._addRooftopCat();
-        this._buildSnowBiome();
-        this._buildDesertBiome();
-        this._blendBiomeEdges();
+        this.__t('buildSnowBiome', () => this._buildSnowBiome());
+        this.__t('buildDesertBiome', () => this._buildDesertBiome());
+        this.__t('blendBiomeEdges', () => this._blendBiomeEdges());
         this._buildSnowSprite();
         this._buildLakeTurtle();
         this._buildFishingBoat();

@@ -2,7 +2,7 @@
 import puppeteer from 'puppeteer-core';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const URL = 'http://localhost:8080/';
+const URL = process.env.EGG_URL || 'http://localhost:8099/';
 
 const browser = await puppeteer.launch({
     executablePath: CHROME,
@@ -19,6 +19,8 @@ page.on('console', msg => {
 page.on('pageerror', err => console.log('[pageerror]', err.message));
 
 await page.goto(URL, { waitUntil: 'networkidle2', timeout: 30000 });
+await page.evaluateOnNewDocument(() => { window.__PERF__ = true; });
+await page.reload({ waitUntil: 'networkidle2' });
 await page.waitForSelector('#start-btn', { timeout: 10000 });
 
 await page.click('#start-btn');
@@ -26,5 +28,8 @@ await page.click('#start-btn');
 await page.waitForFunction(() => typeof window.__ctorMs === 'number', { timeout: 60000 });
 const ctorMs = await page.evaluate(() => window.__ctorMs);
 console.log(`[ctor freeze] ${ctorMs.toFixed(0)}ms (软件渲染，真机 GPU 更快)`);
+
+// 等首帧之后的异步预热打点
+await new Promise(r => setTimeout(r, 4000));
 
 await browser.close();
