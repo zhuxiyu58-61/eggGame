@@ -7055,74 +7055,155 @@ export class Game3D {
 
     // ========= 钓鱼 =========
     _initFishing() {
-        this._fishingState = 'idle';  // idle / casting / waiting / bite
+        this._fishingState = 'idle';  // idle / waiting / bite
         this._fishingTimer = 0;
         this._fishingFloat = null;
+        this._fishingLine = null;
+        this._fishRippleT = 0;
+        this._fishLeaps = [];
+    }
+
+    // 玩家手里的鱼竿（懒建，钓鱼时才显示）
+    _ensureFishingRod() {
+        if (this._fishingRod || !this.player) return;
+        const rod = new THREE.Group();
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.045, 1.7, 6), new THREE.MeshToonMaterial({ color: 0x7a4a26 }));
+        pole.position.y = 0.85; addOutline(pole, 0.02); rod.add(pole);
+        const reel = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.06, 10), new THREE.MeshToonMaterial({ color: 0x2a2a3a }));
+        reel.rotation.z = Math.PI / 2; reel.position.set(0, 0.28, 0.07); rod.add(reel);
+        const tip = new THREE.Object3D(); tip.position.set(0, 1.72, 0); rod.add(tip); this._rodTip = tip;
+        rod.position.set(0.24, 0.66, -0.12);
+        rod.rotation.x = -0.95;                 // 朝前上方举竿
+        rod.visible = false;
+        this.player.add(rod);
+        this._fishingRod = rod;
     }
 
     _toggleFishing() {
         const p = this.player.position;
-        // 必须靠近湖（半径 12 内）才能钓
         const distLake = Math.hypot(p.x - 48, p.z - (-42));
         const distIce = Math.hypot(p.x - (-30), p.z - (-90));
         const nearLake = distLake < 12 || distIce < 11;
-        if (!nearLake) return;
+        if (!nearLake) {
+            if (this._fishingState === 'idle') this._showEasterBadge('🎣 要走到水边才能钓鱼哦');
+            return;
+        }
 
         if (this._fishingState === 'idle') {
-            // 抛竿
+            this._ensureFishingRod();
+            if (this._fishingRod) this._fishingRod.visible = true;
             this._fishingState = 'waiting';
             this._fishingTimer = 3 + Math.random() * 4;
-            this._showEasterBadge('🎣 抛竿中...等一下');
-            // 浮漂：一个红白小球在水面
+            this._showEasterBadge('🎣 抛竿啦～盯着浮漂等鱼上钩');
             const target = distLake < distIce ? { x: 48, z: -42 } : { x: -30, z: -90 };
             this._fishingFloat = new THREE.Mesh(
-                new THREE.SphereGeometry(0.18, 10, 8),
+                new THREE.SphereGeometry(0.16, 10, 8),
                 new THREE.MeshToonMaterial({ color: 0xc83a3a })
             );
-            this._fishingFloat.position.set(
-                target.x + (Math.random() - 0.5) * 4,
-                0.35,
-                target.z + (Math.random() - 0.5) * 4
-            );
+            // 浮漂下半白（红白浮漂）
+            const lower = new THREE.Mesh(new THREE.SphereGeometry(0.162, 10, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), new THREE.MeshToonMaterial({ color: 0xf4f4f4 }));
+            this._fishingFloat.add(lower);
+            this._fishFloatBaseY = 0.32;
+            this._fishingFloat.position.set(target.x + (Math.random() - 0.5) * 4, this._fishFloatBaseY, target.z + (Math.random() - 0.5) * 4);
             this.scene.add(this._fishingFloat);
-            this._tone(440, 0.15, 'sine', 0.05);
-        } else if (this._fishingState === 'waiting') {
-            // 取消
-            this._fishingState = 'idle';
-            if (this._fishingFloat) {
-                this.scene.remove(this._fishingFloat);
-                this._fishingFloat.geometry.dispose();
-                this._fishingFloat.material.dispose();
-                this._fishingFloat = null;
-            }
+            this._spawnWaterRipple(this._fishingFloat.position.x, this._fishingFloat.position.z);
+            // 鱼线
+            const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+            this._fishingLine = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xf0f5f8, transparent: true, opacity: 0.7 }));
+            this.scene.add(this._fishingLine);
+            this._tone(440, 0.15, 'sine', 0.05); this._tone(620, 0.12, 'sine', 0.04, 0.08);
+        } else if (this._fishingState === 'waiting' || this._fishingState === 'bite') {
+            this._endFishing();
+            this._showEasterBadge('🎣 收竿～');
         }
     }
 
+    _endFishing() {
+        this._fishingState = 'idle';
+        if (this._fishingRod) this._fishingRod.visible = false;
+        if (this._fishingFloat) { this.scene.remove(this._fishingFloat); this._fishingFloat.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); this._fishingFloat = null; }
+        if (this._fishingLine) { this.scene.remove(this._fishingLine); this._fishingLine.geometry.dispose(); this._fishingLine.material.dispose(); this._fishingLine = null; }
+    }
+
+    _updateFishingLine() {
+        if (!this._fishingLine || !this._fishingFloat || !this._rodTip) return;
+        const a = new THREE.Vector3(); this._rodTip.getWorldPosition(a);
+        const b = this._fishingFloat.position;
+        const pos = this._fishingLine.geometry.attributes.position;
+        pos.setXYZ(0, a.x, a.y, a.z);
+        pos.setXYZ(1, b.x, b.y + 0.1, b.z);
+        pos.needsUpdate = true;
+    }
+
     _updateFishing(dt) {
-        if (this._fishingState !== 'waiting') return;
-        this._fishingTimer -= dt;
-        // 浮漂上下晃
-        if (this._fishingFloat) {
-            const t = performance.now() * 0.001;
-            this._fishingFloat.position.y = 0.35 + Math.sin(t * 6) * 0.04;
+        // 鱼跃动画（独立于状态，钓上来后继续播完）
+        if (this._fishLeaps && this._fishLeaps.length) {
+            this._fishLeaps = this._fishLeaps.filter(f => {
+                f.life -= dt; f.vy -= 9 * dt;
+                f.mesh.position.x += f.vx * dt; f.mesh.position.y += f.vy * dt; f.mesh.position.z += f.vz * dt;
+                f.mesh.rotation.z += f.spin * dt;
+                if (f.life <= 0 || f.mesh.position.y < 0.1) { this.scene.remove(f.mesh); f.mesh.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); return false; }
+                return true;
+            });
         }
+        if (this._fishingState !== 'waiting' && this._fishingState !== 'bite') return;
+
+        this._updateFishingLine();
+        this._fishingTimer -= dt;
+        const t = performance.now() * 0.001;
+        const fl = this._fishingFloat;
+
+        // 上钩前 1 秒进入 bite：浮漂猛沉 + 快抖 + 提示 + 密涟漪
+        if (this._fishingState === 'waiting' && this._fishingTimer <= 1.0) {
+            this._fishingState = 'bite';
+            this._showEasterBadge('❗ 上钩了！');
+            this._tone(880, 0.08, 'square', 0.05); this._tone(880, 0.08, 'square', 0.05, 0.12);
+        }
+
+        if (fl) {
+            if (this._fishingState === 'bite') {
+                fl.position.y = this._fishFloatBaseY - 0.16 + Math.sin(t * 30) * 0.06;   // 被往下拽+猛抖
+                this._fishRippleT -= dt;
+                if (this._fishRippleT <= 0) { this._fishRippleT = 0.18; this._spawnWaterRipple(fl.position.x, fl.position.z); }
+            } else {
+                fl.position.y = this._fishFloatBaseY + Math.sin(t * 4) * 0.04;
+                this._fishRippleT -= dt;
+                if (this._fishRippleT <= 0) { this._fishRippleT = 1.2; this._spawnWaterRipple(fl.position.x, fl.position.z); }
+            }
+        }
+
         if (this._fishingTimer <= 0) {
-            // 钓到东西
-            const catches = ['🐟', '🐠', '🦐', '🐡', '🌿', '🥾', '⭐'];
+            const catches = ['🐟', '🐠', '🦐', '🐡', '🐟', '🐠', '🌿', '🥾', '⭐'];
             const got = catches[Math.floor(Math.random() * catches.length)];
-            this._showEasterBadge(`钓到了 ${got}`);
+            // 钓上来：水花 + 鱼跃向玩家
+            if (fl) {
+                for (let i = 0; i < 3; i++) this._spawnWaterRipple(fl.position.x + (Math.random() - 0.5), fl.position.z + (Math.random() - 0.5));
+                this._spawnCatchFish(fl.position.x, fl.position.z);
+            }
+            this._showEasterBadge(`🎣 钓到了 ${got}！`);
             this._playWin();
             this._addToInventory(got);
             this._unlockAchievement('first_fish');
-            // 浮漂飞起来
-            if (this._fishingFloat) {
-                this.scene.remove(this._fishingFloat);
-                this._fishingFloat.geometry.dispose();
-                this._fishingFloat.material.dispose();
-                this._fishingFloat = null;
-            }
-            this._fishingState = 'idle';
+            this._endFishing();
         }
+    }
+
+    // 钓上来时一条小鱼跃出水面、划弧飞向玩家
+    _spawnCatchFish(x, z) {
+        const g = new THREE.Group();
+        const cols = [0x6fb7e0, 0xe09a5a, 0x8fd0a0, 0xd9a0e0];
+        const c = cols[(Math.random() * cols.length) | 0];
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), new THREE.MeshToonMaterial({ color: c }));
+        body.scale.set(1.4, 0.8, 0.7); addOutline(body, 0.02); g.add(body);
+        const tail = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.26, 5), new THREE.MeshToonMaterial({ color: c }));
+        tail.rotation.z = Math.PI / 2; tail.position.x = -0.32; g.add(tail);
+        g.position.set(x, 0.4, z);
+        // 朝玩家方向飞
+        const p = this.player.position;
+        const dx = p.x - x, dz = p.z - z; const d = Math.hypot(dx, dz) || 1;
+        g.rotation.y = Math.atan2(dx, dz);
+        this.scene.add(g);
+        this._fishLeaps.push({ mesh: g, vx: dx / d * 2.2, vz: dz / d * 2.2, vy: 4.2, spin: 6, life: 1.3 });
     }
 
     // ========= 季节 =========
