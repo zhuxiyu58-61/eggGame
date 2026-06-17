@@ -2914,6 +2914,7 @@ export class Game3D {
             { x:  48, z:  24 },
             { x: -52, z:  39 },
             { x:  37, z: -49 },
+            { x:  -7, z: -11 }, { x: -11, z:  -7 }, // 广场小菜园边觅食的两只
         ];
         spots.forEach(s => this._addChicken(s.x, s.z));
     }
@@ -9021,6 +9022,57 @@ export class Game3D {
             }
             g.position.set(-9, 0, -9); g.rotation.y = 0.3; this.scene.add(g);
         }
+
+        // —— 南瓜堆 (-6.5, -10.5)：菜园边收的几个南瓜 ——
+        {
+            const g = new THREE.Group();
+            const pumpkinCols = [0xe8731f, 0xf0892b, 0xd95f18];
+            const ps = [[0, 0, 0.5, 0], [0.7, 0, 0.42, 1], [0.35, 0, 0.34, 2], [-0.45, 0.1, 0.38, 0]];
+            for (const [px, py, pr, ci] of ps) {
+                const body = new THREE.Mesh(new THREE.SphereGeometry(pr, 12, 9), new THREE.MeshToonMaterial({ color: pumpkinCols[ci] }));
+                body.scale.y = 0.78; body.position.set(px, pr * 0.78 + py, 0); body.castShadow = true; addOutline(body, 0.03); g.add(body);
+                const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.16, 5), new THREE.MeshToonMaterial({ color: 0x4f7a36 }));
+                stem.position.set(px, pr * 0.78 * 2 + py - 0.02, 0); g.add(stem);
+            }
+            g.position.set(-6.5, 0, -10.5); this.scene.add(g);
+        }
+
+        // —— 晾衣绳 (-13~-13, z 6→12)：两根木柱 + 垂绳 + 几块彩布 ——
+        {
+            const g = new THREE.Group();
+            const z0 = 6, z1 = 12;
+            for (const pz of [z0, z1]) {
+                const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 2.2, 6), woodDark);
+                post.position.set(0, 1.1, pz); addOutline(post, 0.03); g.add(post);
+                const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 5), woodDark);
+                arm.rotation.x = Math.PI / 2; arm.position.set(0, 2.0, pz); g.add(arm);
+            }
+            // 绳（轻微下垂用两段近似）
+            const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, z1 - z0, 4), new THREE.MeshToonMaterial({ color: 0x5a4a3a }));
+            rope.rotation.x = Math.PI / 2; rope.position.set(0, 1.92, (z0 + z1) / 2); g.add(rope);
+            // 挂的布（不同颜色，略微飘）
+            const clothCols = [0xff8fa3, 0x8fd0ff, 0xffe08a, 0x9be39b];
+            this._laundry = [];
+            for (let i = 0; i < 4; i++) {
+                const cz = z0 + 1.0 + i * 1.3;
+                const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.95), new THREE.MeshToonMaterial({ color: clothCols[i], side: THREE.DoubleSide }));
+                cloth.position.set(0, 1.45, cz); cloth.castShadow = true; g.add(cloth);
+                this._laundry.push({ cloth, phase: i * 1.3, baseY: 1.45 });
+            }
+            g.position.set(-13, 0, 0); this.scene.add(g);
+            this._addPropCollider(-13, z0, 0.3, 2.2);
+            this._addPropCollider(-13, z1, 0.3, 2.2);
+        }
+    }
+
+    _updateLaundry(t) {
+        if (!this._laundry) return;
+        for (const l of this._laundry) {
+            // 风吹的轻摆：绕挂点上沿做小幅旋转 + 上下微动
+            l.cloth.rotation.y = Math.sin(t * 1.6 + l.phase) * 0.25;
+            l.cloth.rotation.x = Math.sin(t * 2.1 + l.phase) * 0.08;
+            l.cloth.position.y = l.baseY + Math.sin(t * 2.4 + l.phase) * 0.03;
+        }
     }
 
     _createButterflies() {
@@ -9920,6 +9972,7 @@ export class Game3D {
         this._updateFountain(dt);
         this._updateBellTower(dt);
         this._updateChickens(dt);
+        this._updateLaundry(performance.now() * 0.001);
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
