@@ -287,57 +287,61 @@ function makeCloudTexture() {
     return new THREE.CanvasTexture(canvas);
 }
 
+function _roundRectPath(ctx, x, y, w, h, r) {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+
+// 对话气泡：支持 \n + 按宽度自动换行 + 高度自适应；tex.userData.aspect 给精灵定比例
 function makeBubbleTexture(text) {
+    const W = 384, padX = 26, padTop = 16, lineH = 36, tailH = 18;
+    const font = 'bold 26px "Microsoft YaHei", sans-serif';
+    const meas = document.createElement('canvas').getContext('2d');
+    meas.font = font;
+    const maxW = W - padX * 2;
+    const lines = [];
+    for (const seg of String(text).split('\n')) {
+        if (seg === '') { lines.push(''); continue; }
+        let cur = '';
+        for (const ch of seg) {
+            if (cur && meas.measureText(cur + ch).width > maxW) { lines.push(cur); cur = ch; }
+            else cur += ch;
+        }
+        if (cur) lines.push(cur);
+    }
+    if (!lines.length) lines.push('');
+
+    const boxH = padTop * 2 + lines.length * lineH;
+    const H = boxH + tailH + 8;
     const canvas = document.createElement('canvas');
-    canvas.width = 384; canvas.height = 112;
+    canvas.width = W; canvas.height = H;
     const ctx = canvas.getContext('2d');
+    const bx = 8, by = 6, bw = W - 16, bubbleBg = '#b8ad94';
     // 阴影
     ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    if (ctx.roundRect) {
-        ctx.beginPath(); ctx.roundRect(12, 18, 360, 72, 18); ctx.fill();
-    } else {
-        ctx.fillRect(12, 18, 360, 72);
-    }
-    // 羊皮纸底（亮度低于 bloom 阈值 0.72，避免被发光晕染糊掉文字）
-    const bubbleBg = '#b8ad94';
+    _roundRectPath(ctx, bx + 4, by + 4, bw, boxH, 18); ctx.fill();
+    // 底 + 边框
+    ctx.fillStyle = bubbleBg; _roundRectPath(ctx, bx, by, bw, boxH, 18); ctx.fill();
+    ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 4; _roundRectPath(ctx, bx, by, bw, boxH, 18); ctx.stroke();
+    // 下尖
+    const tcx = W / 2, ty = by + boxH;
     ctx.fillStyle = bubbleBg;
-    if (ctx.roundRect) {
-        ctx.beginPath(); ctx.roundRect(8, 14, 360, 68, 18); ctx.fill();
-    } else {
-        ctx.fillRect(8, 14, 360, 68);
-    }
-    // 边框
-    ctx.strokeStyle = '#1a1a2e';
-    ctx.lineWidth = 4;
-    if (ctx.roundRect) {
-        ctx.beginPath(); ctx.roundRect(8, 14, 360, 68, 18); ctx.stroke();
-    } else {
-        ctx.strokeRect(8, 14, 360, 68);
-    }
-    // 气泡小尖（下边中间）
-    ctx.fillStyle = bubbleBg;
-    ctx.beginPath();
-    ctx.moveTo(178, 82);
-    ctx.lineTo(192, 102);
-    ctx.lineTo(206, 82);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#1a1a2e';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(178, 82);
-    ctx.lineTo(192, 102);
-    ctx.lineTo(206, 82);
-    ctx.stroke();
-    // 文字（深色 + 粗体，羊皮纸底上对比足够）
-    ctx.fillStyle = '#1a1a2e';
-    ctx.font = 'bold 28px "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 192, 48);
+    ctx.beginPath(); ctx.moveTo(tcx - 14, ty - 2); ctx.lineTo(tcx, ty + tailH); ctx.lineTo(tcx + 14, ty - 2); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(tcx - 14, ty - 2); ctx.lineTo(tcx, ty + tailH); ctx.lineTo(tcx + 14, ty - 2); ctx.stroke();
+    // 文字
+    ctx.fillStyle = '#1a1a2e'; ctx.font = font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], W / 2, by + padTop + lineH * i + lineH / 2);
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
+    tex.userData = { aspect: W / H };
     return tex;
 }
 
@@ -4005,8 +4009,8 @@ export class Game3D {
         this.scene.add(g);
         this._fairyRec = this._attachStoryNpc(
             g, '花仙子',
-            '🌸 朝大樱花树浇浇水(E)，给它打打气～',
-            2.0, 2.9
+            '🌸 我是这座山谷的花仙子呀～\n钟楼一灭，谷里的樱花就开得没精神了。\n朝谷心那棵大樱花树浇浇水(E)，给它打打气！',
+            2.0, 3.2
         );
     }
 
@@ -8269,10 +8273,12 @@ export class Game3D {
         label.position.y = labelY;
         group.add(label);
 
+        const bubbleTex = makeBubbleTexture(line);
         const bubble = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: makeBubbleTexture(line), depthWrite: false, transparent: true, opacity: 0,
+            map: bubbleTex, depthWrite: false, transparent: true, opacity: 0,
         }));
-        bubble.scale.set(3.4, 1.0, 1);
+        const bw = 3.6;
+        bubble.scale.set(bw, bw / (bubbleTex.userData?.aspect || 3.4), 1);
         bubble.position.y = bubbleY;
         bubble.visible = false;
         group.add(bubble);
@@ -8285,8 +8291,11 @@ export class Game3D {
     _setStoryLine(rec, line) {
         if (!rec || !rec.bubble) return;
         const old = rec.bubble.material.map;
-        rec.bubble.material.map = makeBubbleTexture(line);
+        const tex = makeBubbleTexture(line);
+        rec.bubble.material.map = tex;
         rec.bubble.material.needsUpdate = true;
+        const bw = 3.6;
+        rec.bubble.scale.set(bw, bw / (tex.userData?.aspect || 3.4), 1);
         if (old) old.dispose();
     }
 
@@ -8362,7 +8371,7 @@ export class Game3D {
         group.position.set(-26, 0, -74);
         this.scene.add(group);
         this._snowSpriteRec = this._attachStoryNpc(
-            group, '小雪精灵', '呜…暖灯火种被雪原最深处的守卫怪抢走了。打败它、把火种带回来给我好吗？', 2.5, 3.4
+            group, '小雪精灵', '呜…我冷得直发抖，话都说不利索了。\n暖灯火种被雪原最深处的守卫怪抢走了，\n你能帮我把它抢回来吗？', 2.5, 3.6
         );
     }
 
@@ -8408,7 +8417,7 @@ export class Game3D {
         group.position.set(40, 0, -33);
         this.scene.add(group);
         this._turtleRec = this._attachStoryNpc(
-            group, '老乌龟', '月光石被守卫怪护在湖那头…帮我抢回来、带回来交给我好吗？', 1.6, 2.4
+            group, '老乌龟', '唉，我年纪大了游得慢，追不上那家伙…\n月光石被守卫怪护在湖那头，\n帮我抢回来好吗？夜里它能照亮回家的路。', 1.6, 2.7
         );
     }
 
@@ -8446,7 +8455,7 @@ export class Game3D {
         group.position.set(-30, 0, 114);
         this.scene.add(group);
         this._travelerRec = this._attachStoryNpc(
-            group, '沙漠旅人', '天一直灰蒙蒙的，好闷…太阳宝石在沙漠最深处，被守卫怪看着。帮我抢回来放回金字塔，阳光就回来啦！', 2.0, 2.9
+            group, '沙漠旅人', '天一直灰蒙蒙的，嗓子都快冒烟了…\n太阳宝石在沙漠最深处，被守卫怪看着。\n帮我抢回来放回金字塔，阳光就回来啦！', 2.0, 3.1
         );
     }
 
@@ -8479,7 +8488,7 @@ export class Game3D {
         group.position.set(-118, 0, 4);
         this.scene.add(group);
         this._spiritRec = this._attachStoryNpc(
-            group, '森林精灵', '森林的星光草被深处的守卫夺走了…没有它，森林会慢慢暗下去。帮帮我？', 2.4, 3.3
+            group, '森林精灵', '嘘——你听，森林的光在一点点变弱…\n星光草被深处的守卫夺走了，没有它，\n萤火虫会睡着，森林会慢慢暗下去。帮帮我？', 2.4, 3.5
         );
     }
 
@@ -8516,7 +8525,7 @@ export class Game3D {
         group.position.set(4, 0, 3);
         this.scene.add(group);
         this._elderRec = this._attachStoryNpc(
-            group, '蛋爷爷', '村庄的钟楼灭了。去雪原·沙漠·月光湖·萤火森林，打败守卫、把 4 样心愿之物带回来交给伙伴，再回钟楼敲响它，就能重新点亮！', 2.3, 3.2
+            group, '蛋爷爷', '孩子，村庄的钟楼灭了，大家心里都空落落的。\n去雪原·沙漠·月光湖·萤火森林，打败守卫、\n把 4 样心愿之物带回来交给伙伴，\n再回钟下敲响它，钟楼就会重新亮起来！', 2.3, 3.5
         );
     }
 
