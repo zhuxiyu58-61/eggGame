@@ -8637,7 +8637,7 @@ export class Game3D {
         // 阔叶：4 种树型随机 + 每棵在型内再大幅随机；叶色多数绿、少数秋色 → 一眼像不同树种
         const greens = [0x4f9a4a, 0x5aa84f, 0x6cb56c, 0x7cc25a, 0x4a8f55, 0x8fc96a, 0x3f8a48, 0x66ad5a];
         const autumns = [0xe5862b, 0xf0a93a, 0xd9532b, 0xe7c24a, 0xcf6b2e, 0xc94f3c];
-        const isAutumn = Math.random() < 0.20;
+        const isAutumn = Math.random() < 0.28;
         const palette = isAutumn ? autumns : greens;
         const barkCols = [0x7a4a26, 0x8a5a2e, 0x6e4322, 0x946238];
         const baseGreen = palette[(Math.random() * palette.length) | 0];
@@ -9401,14 +9401,16 @@ export class Game3D {
                 const hr = (y + ph / 2) / ph;          // 0 山脚 .. 1 山顶
                 const ang = Math.atan2(z, x);
                 // 多谐波山脊 + 单瓣肩脊：让一侧鼓出，轮廓嶙峋不对称
-                const ridge = 0.30 * Math.sin(3 * ang + s1) + 0.16 * Math.sin(7 * ang + s2)
-                    + 0.08 * Math.sin(15 * ang + s3) + 0.20 * Math.sin(ang + s1 * 0.5);
-                const radialF = 1 + ridge * (1 - hr * 0.5);
+                const ridge = 0.34 * Math.sin(3 * ang + s1) + 0.20 * Math.sin(7 * ang + s2)
+                    + 0.12 * Math.sin(13 * ang + s3) + 0.24 * Math.sin(ang + s1 * 0.5);
+                // 每顶点小随机抖动 → 岩石嶙峋感（配合 flatShading 出硬切面）
+                const jit = (Math.sin(i * 12.9898 + s2 * 78.2) * 43758.5453) % 1;
+                const radialF = 1 + ridge * (1 - hr * 0.45) + jit * 0.06 * (1 - hr);
                 x *= radialF; z *= radialF;
                 // 越往上越向 lean 方向偏，峰顶歪一点
                 x += lx * hr * hr; z += lz * hr * hr;
                 pos.setX(i, x); pos.setZ(i, z);
-                if (hr < 0.32 && hr > 0.01) pos.setY(i, y + ridge * ph * 0.2);   // 山脚丘陵起伏
+                if (hr < 0.34 && hr > 0.01) pos.setY(i, y + ridge * ph * 0.22);   // 山脚丘陵起伏
                 // 顶点色：base→top 渐变
                 tmp.copy(cBase).lerp(cTop, Math.min(1, hr * 1.15));
                 if (snowCap) {
@@ -9420,7 +9422,8 @@ export class Game3D {
             pos.needsUpdate = true;
             geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
             geo.computeVertexNormals();
-            return new THREE.Mesh(geo, new THREE.MeshToonMaterial({ vertexColors: true }));
+            // flatShading：每个三角面独立法线 → 硬朗低多边形切面，不被平滑成软包
+            return new THREE.Mesh(geo, new THREE.MeshToonMaterial({ vertexColors: true, flatShading: true }));
         };
 
         const main = buildPeak(rBase, h);
@@ -9438,6 +9441,33 @@ export class Game3D {
             sub.scale.set(1, 1, 0.82 + Math.random() * 0.28);
             sub.rotation.y = Math.random() * Math.PI;
             grp.add(sub);
+        }
+
+        // 山不光秃：绿林/森林山坡披小树（疏密不一，有的密有的稀有的近乎无）；雪山山脚点几棵深松
+        const zsc = main.scale.z;
+        const treeColor = snowCap ? 0x2c5e3c
+            : new THREE.Color(topColor).multiplyScalar(0.6).getHex();
+        const treeN = snowCap ? (Math.random() * 4 | 0)        // 雪山 0~3 棵山脚松
+            : (3 + (Math.random() * 9 | 0));                   // 绿山 3~11 棵，分布随机
+        const hrMax = snowCap ? 0.16 : 0.42;                    // 雪山只在脚下，绿山到中坡
+        for (let i = 0; i < treeN; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const hr = 0.03 + Math.random() * hrMax;
+            const rr = rBase * (1 - hr) * (0.78 + Math.random() * 0.12);  // 贴坡面略偏内
+            const tx = Math.cos(a) * rr, tz = Math.sin(a) * rr * zsc;
+            const ty = yBase + hr * h - size * 0.02;
+            const ts = size * (0.05 + Math.random() * 0.05);    // 树高随山尺寸缩放
+            const mini = new THREE.Group();
+            for (let k = 0; k < 2; k++) {                        // 两层锥=小针叶树，背景够用
+                const cone = new THREE.Mesh(
+                    new THREE.ConeGeometry(ts * (0.95 - k * 0.32), ts * 1.15, 6),
+                    new THREE.MeshToonMaterial({ color: treeColor })
+                );
+                cone.position.y = ts * (0.55 + k * 0.62);
+                mini.add(cone);
+            }
+            mini.position.set(tx, ty, tz);
+            grp.add(mini);
         }
 
         grp.position.set(cx, 0, cz);
@@ -10596,12 +10626,17 @@ export class Game3D {
         const pitch = this.cameraPitch;
         const fwdX = Math.sin(yaw), fwdZ = -Math.cos(yaw);
 
-        // 室外：相机在 lookDir 反方向 13m + 上方 11m（蛋面对相机的反方向走，即蛋朝相机前方走）
-        const outRadius = 13, outHeight = 11;
-        const outX = p.x - fwdX * outRadius;
-        const outY = p.y + outHeight;
-        const outZ = p.z - fwdZ * outRadius;
-        const outLX = p.x, outLY = p.y + 0.4, outLZ = p.z;
+        // 室外：第三人称球面轨道——pitch 控制相机仰角(上下看)，yaw 控制环绕(左右看)
+        // pitch=0 时仰角≈0.62，取景≈旧的 13m 远/11m 高；鼠标上移→相机降低→视野抬向远山天空
+        const outDist = 17;
+        let elev = 0.62 - pitch * 0.6;
+        if (elev < 0.1) elev = 0.1;        // 最低：近水平，能抬头看山/天
+        if (elev > 1.28) elev = 1.28;      // 最高：近俯视，能低头看脚下
+        const outHoriz = outDist * Math.cos(elev);
+        const outX = p.x - fwdX * outHoriz;
+        const outY = p.y + outDist * Math.sin(elev) + 0.6;
+        const outZ = p.z - fwdZ * outHoriz;
+        const outLX = p.x, outLY = p.y + 1.0, outLZ = p.z;
 
         // FPS：相机在蛋眼睛位置（沿 lookDir 前方 0.8m + 上 0.33m，避开描边壳）
         const fpsX = p.x + fwdX * 0.8;
