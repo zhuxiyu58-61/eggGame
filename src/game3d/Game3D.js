@@ -866,7 +866,7 @@ export class Game3D {
         this._scatterMushrooms();
         this._buildHotAirBalloon();
         this._buildSnowmen();
-        this._buildFence();
+        // （旧的半径78圆形篱笆已移除：世界扩大后它卡在地图中间，只剩一对对横杠像散落的棍子；边界改由外圈山承担）
         this._buildHolidayLights();
         this._buildFountain();
         this._buildBellTower();
