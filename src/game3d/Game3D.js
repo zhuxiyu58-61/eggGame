@@ -893,6 +893,7 @@ export class Game3D {
         this._addVillageLife();
         this._addMarketStalls();
         this._addBunting();
+        this._addPlazaFlowers();
         this._buildCollectibleStars();
         this._scatterMushrooms();
         this._buildHotAirBalloon();
@@ -9128,6 +9129,47 @@ export class Game3D {
         buildStall(-8, 14, Math.PI, 0xe8a93a, 0xf3efe2, [
             { x: -0.6, c: 0xd9a05a }, { x: 0.0, c: 0xc8823f }, { x: 0.6, c: 0xff7aa8 },
         ]);
+    }
+
+    // 喷泉四周一圈小花坛（无碰撞，可穿行；让广场中心像被打理过）
+    _addPlazaFlowers() {
+        const petalCols = [0xff6f91, 0xffd24a, 0x8ec7ff, 0xc78cff, 0xff9e5e, 0xfff3a0];
+        const stemMat = new THREE.MeshToonMaterial({ color: 0x4f8a3a });
+        const leafMat = new THREE.MeshToonMaterial({ color: 0x5fa048 });
+        const centerMat = new THREE.MeshToonMaterial({ color: 0xffe08a });
+        const ring = new THREE.Group();
+        const flower = (fx, fz, col, h) => {
+            const g = new THREE.Group();
+            const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, h, 5), stemMat);
+            stem.position.y = h / 2; g.add(stem);
+            // 一两片叶子
+            const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), leafMat);
+            leaf.scale.set(1.6, 0.4, 0.8); leaf.position.set(0.06, h * 0.45, 0); g.add(leaf);
+            // 花心
+            const core = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), centerMat);
+            core.position.y = h; g.add(core);
+            // 5 片花瓣
+            const petMat = new THREE.MeshToonMaterial({ color: col });
+            for (let p = 0; p < 5; p++) {
+                const a = (p / 5) * Math.PI * 2;
+                const petal = new THREE.Mesh(new THREE.SphereGeometry(0.07, 7, 5), petMat);
+                petal.scale.set(1, 0.5, 1.5);
+                petal.position.set(Math.cos(a) * 0.1, h, Math.sin(a) * 0.1);
+                g.add(petal);
+            }
+            g.position.set(fx, 0, fz);
+            ring.add(g);
+        };
+        const R = 2.25, N = 18;
+        for (let i = 0; i < N; i++) {
+            const a = (i / N) * Math.PI * 2;
+            // 小幅抖动半径与角度，自然成簇
+            const rr = R + (i % 3 - 1) * 0.16;
+            const fx = Math.cos(a) * rr;
+            const fz = Math.sin(a) * rr;
+            flower(fx, fz, petalCols[i % petalCols.length], 0.26 + (i % 4) * 0.04);
+        }
+        this.scene.add(ring);
     }
 
     // 三条路入口横挂三角彩旗串（catenary 下垂 + 随风轻摆）
