@@ -784,7 +784,7 @@ export class Game3D {
         grassTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         grassTex.repeat.set(32, 32);
         const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(320, 320),
+            new THREE.PlaneGeometry(480, 480),
             new THREE.MeshToonMaterial({ map: grassTex })
         );
         ground.rotation.x = -Math.PI / 2;
@@ -879,6 +879,7 @@ export class Game3D {
         this._addRooftopCat();
         this.__t('buildSnowBiome', () => this._buildSnowBiome());
         this.__t('buildDesertBiome', () => this._buildDesertBiome());
+        this.__t('buildForestBiome', () => this._buildForestBiome());
         this.__t('blendBiomeEdges', () => this._blendBiomeEdges());
         this._buildSnowSprite();
         this._buildLakeTurtle();
@@ -1521,8 +1522,9 @@ export class Game3D {
             f.position.y = d.home.y + Math.sin(t * d.speed * 1.7 + d.phase) * 0.4;
             f.position.z = d.home.z + Math.cos(t * d.speed * 1.3 + d.phase) * d.radius;
             const flicker = 0.5 + 0.5 * Math.sin(t * 6 + d.phase * 7);
-            f.material.emissiveIntensity = 2.5 * flicker * nightness;
-            f.visible = nightness > 0.05;
+            const lit = d.forest ? 1 : nightness;   // 森林萤火虫白天也亮
+            f.material.emissiveIntensity = 2.5 * flicker * lit;
+            f.visible = d.forest || nightness > 0.05;
         });
     }
 
@@ -2168,6 +2170,7 @@ export class Game3D {
             const z = (Math.random() - 0.5) * 140;
             if (inPath(x, z)) continue;
             if (z < -56) continue;  // 雪原里不长蘑菇
+            if (z > 80 && Math.abs(x) < 104) continue;  // 沙漠里不长蘑菇
             this._addMushroom(x, z);
         }
     }
@@ -3172,28 +3175,28 @@ export class Game3D {
         const snowTex = makeSnowTexture();
         snowTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         const snowGround = new THREE.Mesh(
-            new THREE.PlaneGeometry(160, 60),
+            new THREE.PlaneGeometry(212, 116),
             new THREE.MeshToonMaterial({ map: snowTex })
         );
         snowGround.rotation.x = -Math.PI / 2;
-        snowGround.position.set(0, 0.03, -85);
+        snowGround.position.set(0, 0.03, -120);
         snowGround.receiveShadow = true;
         this.scene.add(snowGround);
 
         // 雪地边缘渐变（深色一点的雪做过渡）
         const edge = new THREE.Mesh(
-            new THREE.PlaneGeometry(160, 6),
+            new THREE.PlaneGeometry(212, 6),
             new THREE.MeshToonMaterial({ color: 0xd8e0e8, transparent: true, opacity: 0.7 })
         );
         edge.rotation.x = -Math.PI / 2;
-        edge.position.set(0, 0.035, -58);
+        edge.position.set(0, 0.035, -60);
         this.scene.add(edge);
 
-        // 白顶松树（圆锥三层叠）— 散布
-        const inSnow = (x, z) => x > -70 && x < 70 && z < -62 && z > -110;
-        for (let i = 0; i < 28; i++) {
-            const x = (Math.random() - 0.5) * 140;
-            const z = -65 - Math.random() * 38;
+        // 白顶松树（圆锥三层叠）— 散布（区域扩大后铺满更深更宽的雪原）
+        const inSnow = (x, z) => x > -102 && x < 102 && z < -62 && z > -174;
+        for (let i = 0; i < 50; i++) {
+            const x = (Math.random() - 0.5) * 196;
+            const z = -65 - Math.random() * 104;
             if (!inSnow(x, z)) continue;
             this._addPineTree(x, z);
         }
@@ -3238,9 +3241,9 @@ export class Game3D {
         const driftMat = new THREE.MeshToonMaterial({ color: 0xf6f9ff });
         const nearPondOrIgloo = (x, z) =>
             Math.hypot(x + 30, z + 90) < 10 || Math.hypot(x - 30, z + 80) < 6;
-        for (let i = 0; i < 12; i++) {
-            const x = (Math.random() - 0.5) * 130;
-            const z = -64 - Math.random() * 42;
+        for (let i = 0; i < 24; i++) {
+            const x = (Math.random() - 0.5) * 192;
+            const z = -64 - Math.random() * 104;
             if (!inSnow(x, z) || nearPondOrIgloo(x, z)) continue;
             const drift = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), driftMat);
             const s = 0.8 + Math.random() * 1.8;
@@ -3293,8 +3296,8 @@ export class Game3D {
         this.scene.add(igloo);
         // 不做障碍，蛋可以走过去（屋是装饰）
 
-        // 几个雪人（永驻雪地，跟天气雪人不同）
-        for (const sp of [[15, -75], [-15, -95], [40, -100]]) {
+        // 几个雪人（永驻雪地，跟天气雪人不同）— 铺到更深的雪原里
+        for (const sp of [[15, -75], [-15, -95], [40, -100], [-60, -135], [55, -150], [0, -165]]) {
             this._addSnowman(sp[0], sp[1]);
             // _addSnowman 会把 group 加到 this.snowmen，默认 visible=false
             // 把刚加的设为永久可见
@@ -3308,48 +3311,48 @@ export class Game3D {
         // 南边 (z > +78) 进入太阳沙漠：暖沙地 + 仙人掌 + 沙丘 + 干涸绿洲 + 沙岩金字塔
         // （起点压在 z78 之后，给村屋 z58 / 后院金币 z67 留出缓冲）
         const sandGround = new THREE.Mesh(
-            new THREE.PlaneGeometry(170, 84),
+            new THREE.PlaneGeometry(212, 124),
             new THREE.MeshToonMaterial({ color: 0xe7cd96 })
         );
         sandGround.rotation.x = -Math.PI / 2;
-        sandGround.position.set(0, 0.03, 118);
+        sandGround.position.set(0, 0.03, 142);
         sandGround.receiveShadow = true;
         this.scene.add(sandGround);
 
         // 沙地边缘渐变（深一点的沙做过渡，盖住草沙接缝）
         const edge = new THREE.Mesh(
-            new THREE.PlaneGeometry(170, 7),
+            new THREE.PlaneGeometry(212, 7),
             new THREE.MeshToonMaterial({ color: 0xd8bb7e, transparent: true, opacity: 0.75 })
         );
         edge.rotation.x = -Math.PI / 2;
-        edge.position.set(0, 0.035, 77);
+        edge.position.set(0, 0.035, 79);
         this.scene.add(edge);
 
         // 沙波纹（细长扁平的浅色弧，平铺地面增加层次）
         const rippleMat = new THREE.MeshToonMaterial({ color: 0xf0dcab, transparent: true, opacity: 0.5 });
-        for (let i = 0; i < 16; i++) {
+        for (let i = 0; i < 28; i++) {
             const rip = new THREE.Mesh(new THREE.PlaneGeometry(6 + Math.random() * 8, 0.9), rippleMat);
             rip.rotation.x = -Math.PI / 2;
             rip.rotation.z = (Math.random() - 0.5) * 0.6;
-            rip.position.set((Math.random() - 0.5) * 150, 0.04, 84 + Math.random() * 70);
+            rip.position.set((Math.random() - 0.5) * 196, 0.04, 84 + Math.random() * 110);
             this.scene.add(rip);
         }
 
-        const inDesert = (x, z) => x > -78 && x < 78 && z > 80 && z < 158;
+        const inDesert = (x, z) => x > -102 && x < 102 && z > 80 && z < 202;
 
         // 仙人掌散布
-        for (let i = 0; i < 18; i++) {
-            const x = (Math.random() - 0.5) * 150;
-            const z = 82 + Math.random() * 72;
+        for (let i = 0; i < 34; i++) {
+            const x = (Math.random() - 0.5) * 196;
+            const z = 82 + Math.random() * 114;
             if (!inDesert(x, z)) continue;
             this._addCactus(x, z);
         }
 
         // 沙丘（压扁的暖沙球，错落几堆）
         const duneMat = new THREE.MeshToonMaterial({ color: 0xddc086 });
-        for (let i = 0; i < 16; i++) {
-            const x = (Math.random() - 0.5) * 150;
-            const z = 82 + Math.random() * 74;
+        for (let i = 0; i < 30; i++) {
+            const x = (Math.random() - 0.5) * 196;
+            const z = 82 + Math.random() * 116;
             if (!inDesert(x, z)) continue;
             const dune = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 8), duneMat);
             const s = 2 + Math.random() * 4;
@@ -3407,9 +3410,9 @@ export class Game3D {
 
         // 晒白的小石头/骨头点缀
         const boneMat = new THREE.MeshToonMaterial({ color: 0xeae0cf });
-        for (let i = 0; i < 8; i++) {
-            const x = (Math.random() - 0.5) * 140;
-            const z = 84 + Math.random() * 70;
+        for (let i = 0; i < 16; i++) {
+            const x = (Math.random() - 0.5) * 192;
+            const z = 84 + Math.random() * 108;
             if (!inDesert(x, z)) continue;
             const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5 + Math.random() * 0.5), boneMat);
             rock.position.set(x, 0.2, z);
@@ -3528,10 +3531,11 @@ export class Game3D {
 
         // 每个区域的进区故事旁白 + 色调
         this._regionMeta = {
-            snow:   { story: '❄️ 冰雪国<br>好冷呀～蛋蛋冻得直打哆嗦。<br>听说雪山深处住着孤单的小雪精灵…' },
-            desert: { story: '🔥 太阳沙漠<br>好热！汗都冒出来了。<br>绿洲快干了，清泉之珠被埋在沙子里…' },
+            snow:   { story: '❄️ 冰雪国<br>好冷呀～雪原好大，走好久都走不到头。<br>去找哆嗦的小雪精灵，它需要帮忙…' },
+            desert: { story: '🔥 太阳沙漠<br>好热！一望无际的沙海。<br>绿洲边有个渴坏了的旅人在等人帮忙…' },
             lake:   { story: '🌊 月光湖<br>水边好清凉～<br>湖底的老乌龟好像在找什么东西。' },
-            home:   { story: '🌿 回到温暖的村庄，真舒服~' },
+            forest: { story: '🌲 萤火森林<br>雾蒙蒙的，到处是会发光的蘑菇和萤火虫。<br>森林深处的小精灵在找一样宝贝…' },
+            home:   { story: '🌿 回到温暖的村庄，真舒服~<br>去广场找蛋爷爷问问该做什么。' },
         };
 
         // 进区故事气泡（顶部居中卡片）
@@ -3561,9 +3565,10 @@ export class Game3D {
     }
 
     _regionAt(x, z) {
-        if (z < -60 && Math.abs(x) < 75) return 'snow';
-        if (z > 78 && Math.abs(x) < 78) return 'desert';
-        if (Math.hypot(x - 48, z + 42) < 26) return 'lake';
+        if (z < -62 && Math.abs(x) < 104) return 'snow';
+        if (z > 80 && Math.abs(x) < 104) return 'desert';
+        if (Math.hypot(x - 48, z + 42) < 32) return 'lake';
+        if (x < -66 && Math.abs(z) < 62) return 'forest';
         return 'home';
     }
 
@@ -3580,9 +3585,10 @@ export class Game3D {
 
         // 各区"深入度"：越往里感受越强
         let coldTarget = 0, heatTarget = 0, coolTarget = 0;
-        if (region === 'snow')   coldTarget = Math.max(0.25, Math.min(1, (-60 - p.z) / 50));
-        if (region === 'desert') heatTarget = Math.max(0.25, Math.min(1, (p.z - 78) / 55));
+        if (region === 'snow')   coldTarget = Math.max(0.25, Math.min(1, (-62 - p.z) / 95));
+        if (region === 'desert') heatTarget = Math.max(0.25, Math.min(1, (p.z - 80) / 105));
         if (region === 'lake')   coolTarget = 0.6;
+        if (region === 'forest') coolTarget = 0.42;
         this._coldT = approach(this._coldT, coldTarget, dt * 1.5);
         this._heatT = approach(this._heatT, heatTarget, dt * 1.5);
         this._coolT = approach(this._coolT, coolTarget, dt * 1.5);
@@ -4963,11 +4969,11 @@ export class Game3D {
             { rarity: 0.03, name: '空箱',     emoji: '🕳️', color: 0x666666, value: 0,      kind: 'empty' },
         ];
 
-        for (let i = 0; i < 22; i++) {
+        for (let i = 0; i < 40; i++) {
             let x, z, ok = false;
             for (let tries = 0; tries < 30; tries++) {
                 const ang = Math.random() * Math.PI * 2;
-                const r = 10 + Math.random() * 65;
+                const r = 12 + Math.random() * 150;   // 铺到扩大后的各区，越远越值（_rollLoot 按距离给好货）
                 x = Math.cos(ang) * r;
                 z = Math.sin(ang) * r;
                 if (this._isValidChestPos(x, z)) { ok = true; break; }
@@ -5335,6 +5341,12 @@ export class Game3D {
             { x: -55, z: 30, type: 'fast' },     // 远·西南
             { x: 50, z: -50, type: 'tank' },     // 远·东北（守好货）
             { x: -45, z: -55, type: 'tank' },    // 远·西北
+            // 区域扩大后，深处也有游荡的怪（深入才遇到，路上不被堵死）
+            { x: -22, z: -118, type: 'fast' },   // 深·雪原
+            { x: 40, z: 92,   type: 'normal' },  // 沙漠中段
+            { x: 28, z: 150,  type: 'tank' },    // 深·沙漠
+            { x: -112, z: 12, type: 'normal' },  // 萤火森林入口
+            { x: -126, z: -34, type: 'fast' },   // 萤火森林深处
         ];
         spots.forEach(s => this._addMonster(s.x, s.z, s.type));
     }
@@ -8087,12 +8099,14 @@ export class Game3D {
             if (Math.hypot(x - (-42), z - 0)  < goalPad) return true;
             return false;
         };
-        for (let i = 0; i < 22; i++) {
-            const r = 25 + Math.random() * 50;
+        for (let i = 0; i < 46; i++) {
+            const r = 25 + Math.random() * 124;            // 铺到更大的草甸（外圈山约 196+）
             const ang = Math.random() * Math.PI * 2;
             const x = Math.cos(ang) * r;
             const z = Math.sin(ang) * r;
             if (inPath(x, z)) continue;
+            if (z > 80 && Math.abs(x) < 104) continue;     // 沙漠自己有仙人掌，草树不进沙
+            if (x < -66 && Math.abs(z) < 62) continue;     // 萤火森林自己有密林
             if (z < -56) { this._addPineTree(x, z); continue; }  // 雪原里只长雪松
             this._addTree(x, z);
         }
@@ -8224,10 +8238,12 @@ export class Game3D {
             if (Math.abs(z) < 4 && x < 0 && x > -52) return true;        // 西
             return false;
         };
-        for (let i = 0; i < 90; i++) {
-            const x = (Math.random() - 0.5) * 160;
-            const z = (Math.random() - 0.5) * 160;
+        for (let i = 0; i < 150; i++) {
+            const x = (Math.random() - 0.5) * 280;
+            const z = (Math.random() - 0.5) * 280;
             if (inPath(x, z)) continue;
+            if (z > 80 && Math.abs(x) < 104) continue;        // 沙漠不长花草
+            if (x < -66 && Math.abs(z) < 62) continue;        // 森林自有植被
             const t = Math.random();
             if (z < -56) { this._addStone(x, z); continue; }  // 雪原里只有石头，花/灌木不长
             if (t < 0.4)       this._addStone(x, z);
@@ -8381,19 +8397,25 @@ export class Game3D {
         const greenFar = new THREE.MeshToonMaterial({ color: 0x86c074 });
         const sand     = new THREE.MeshToonMaterial({ color: 0xe3c489 });
         const sandFar  = new THREE.MeshToonMaterial({ color: 0xeed3a3 });
-        for (let i = 0; i < 22; i++) {
-            const angle = (i / 22) * Math.PI * 2;
-            const radius = 132 + Math.random() * 16;
-            const size = 10 + Math.random() * 8;
+        // 深绿林山（西侧萤火森林背景）
+        const forestDark = new THREE.MeshToonMaterial({ color: 0x3f7a48 });
+        const forestMid  = new THREE.MeshToonMaterial({ color: 0x4f9156 });
+        const COUNT = 34;
+        for (let i = 0; i < COUNT; i++) {
+            const angle = (i / COUNT) * Math.PI * 2;
+            const radius = 196 + Math.random() * 26;          // 推到约 196-222：四区扩大后山要更远才圈得住
+            const size = 12 + Math.random() * 9;
             const cx = Math.cos(angle) * radius;
             const cz = Math.sin(angle) * radius;
             const near = Math.random() > 0.5;
-            if (cz < -70) {
+            if (cz < -120) {
                 this._addPeakMountain(cx, cz, size, snowRock, snowCap);   // ❄️ 雪山：岩锥 + 白雪顶
-            } else if (cz > 80) {
+            } else if (cz > 120) {
                 this._addSandDune(cx, cz, size, near ? sand : sandFar);   // 🏜️ 沙丘：低矮宽圆
+            } else if (cx < -120) {
+                this._addPeakMountain(cx, cz, size, near ? forestDark : forestMid, null);  // 🌲 萤火森林深绿山
             } else {
-                this._addPeakMountain(cx, cz, size, near ? green : greenFar, null);  // 🌲 绿林山
+                this._addPeakMountain(cx, cz, size, near ? green : greenFar, null);  // 🌳 绿林山
             }
         }
     }
@@ -8459,29 +8481,169 @@ export class Game3D {
         const sandMat = new THREE.MeshToonMaterial({ color: 0xe7cd96 });
         const dryMat = new THREE.MeshToonMaterial({ color: 0xc3ad62 });
 
-        // —— 雪地↔草地 接缝（雪原南缘约 z=-55）——
-        for (let i = 0; i < 46; i++) {                       // 草地上的雪斑：往南渐疏
-            const x = (Math.random() - 0.5) * 152;
-            const z = -55 + Math.random() * Math.random() * 18;
+        // —— 雪地↔草地 接缝（雪原南缘约 z=-57）——
+        for (let i = 0; i < 60; i++) {                       // 草地上的雪斑：往南渐疏
+            const x = (Math.random() - 0.5) * 206;
+            const z = -57 + Math.random() * Math.random() * 18;
             addPatch(snowMat, x, z, 0.8 + Math.random() * 2.4);
         }
-        for (let i = 0; i < 24; i++) {                       // 雪地里的草丛：往北渐疏
-            const x = (Math.random() - 0.5) * 150;
-            const z = -57 - Math.random() * Math.random() * 15;
+        for (let i = 0; i < 30; i++) {                       // 雪地里的草丛：往北渐疏
+            const x = (Math.random() - 0.5) * 204;
+            const z = -59 - Math.random() * Math.random() * 15;
             addTuft(grassMat, x, z, 0.35 + Math.random() * 0.3);
         }
 
-        // —— 沙地↔草地 接缝（沙漠北缘约 z=78）——
-        for (let i = 0; i < 46; i++) {                       // 草地上的沙斑：往北渐疏
-            const x = (Math.random() - 0.5) * 162;
-            const z = 78 - Math.random() * Math.random() * 18;
+        // —— 沙地↔草地 接缝（沙漠北缘约 z=79）——
+        for (let i = 0; i < 60; i++) {                       // 草地上的沙斑：往北渐疏
+            const x = (Math.random() - 0.5) * 206;
+            const z = 79 - Math.random() * Math.random() * 18;
             addPatch(sandMat, x, z, 0.8 + Math.random() * 2.4);
         }
-        for (let i = 0; i < 22; i++) {                       // 沙地里的枯草丛：往南渐疏
-            const x = (Math.random() - 0.5) * 160;
-            const z = 80 + Math.random() * Math.random() * 15;
+        for (let i = 0; i < 30; i++) {                       // 沙地里的枯草丛：往南渐疏
+            const x = (Math.random() - 0.5) * 204;
+            const z = 81 + Math.random() * Math.random() * 15;
             addTuft(dryMat, x, z, 0.3 + Math.random() * 0.3);
         }
+    }
+
+    // ===================== 萤火森林（西侧）=====================
+    _buildForestBiome() {
+        // 区域：x < -66 且 |z| < 62。内容铺在 x[-178,-72] z[-58,58]，中心留空给精灵树+任务
+        this.forestCenter = { x: -122, z: 0 };
+        const inForest = (x, z) => x < -70 && x > -178 && z > -58 && z < 58;
+
+        // 苔藓地（深绿，略高于草地盖住接缝）
+        const mossGround = new THREE.Mesh(
+            new THREE.PlaneGeometry(120, 130),
+            new THREE.MeshToonMaterial({ color: 0x3f6b3e })
+        );
+        mossGround.rotation.x = -Math.PI / 2;
+        mossGround.position.set(-124, 0.028, 0);
+        mossGround.receiveShadow = true;
+        this.scene.add(mossGround);
+        // 东缘过渡（草↔苔藓）
+        const fedge = new THREE.Mesh(
+            new THREE.PlaneGeometry(6, 130),
+            new THREE.MeshToonMaterial({ color: 0x4f7a48, transparent: true, opacity: 0.7 })
+        );
+        fedge.rotation.x = -Math.PI / 2;
+        fedge.position.set(-67, 0.034, 0);
+        this.scene.add(fedge);
+
+        // 接缝散斑（草地里的苔藓 / 苔藓里的草）
+        const mossPatch = new THREE.MeshToonMaterial({ color: 0x4a7a42 });
+        for (let i = 0; i < 26; i++) {
+            const x = -66 - Math.random() * Math.random() * 16;
+            const z = (Math.random() - 0.5) * 124;
+            const p = new THREE.Mesh(new THREE.CircleGeometry(0.8 + Math.random() * 2, 12), mossPatch);
+            p.rotation.x = -Math.PI / 2; p.position.set(x, 0.044, z);
+            this.scene.add(p);
+        }
+
+        // 中心精灵树（地标：粗干 + 发光树冠）
+        this._addSpiritTree(this.forestCenter.x, this.forestCenter.z);
+
+        // 密林（阔叶树）——避开中心空地（留给精灵 + 任务物）
+        for (let i = 0; i < 30; i++) {
+            const x = -74 - Math.random() * 100;
+            const z = (Math.random() - 0.5) * 112;
+            if (!inForest(x, z)) continue;
+            if (Math.hypot(x - this.forestCenter.x, z - this.forestCenter.z) < 11) continue;
+            this._addTree(x, z);
+        }
+
+        // 发光蘑菇
+        for (let i = 0; i < 18; i++) {
+            const x = -74 - Math.random() * 100;
+            const z = (Math.random() - 0.5) * 112;
+            if (!inForest(x, z)) continue;
+            if (Math.hypot(x - this.forestCenter.x, z - this.forestCenter.z) < 6) continue;
+            this._addGlowMushroom(x, z);
+        }
+
+        // 地面薄雾（扁平半透白盘，叠出朦胧感）
+        const mistMat = new THREE.MeshBasicMaterial({
+            color: 0xcfe8e0, transparent: true, opacity: 0.12, depthWrite: false, fog: false,
+        });
+        for (let i = 0; i < 14; i++) {
+            const x = -74 - Math.random() * 100;
+            const z = (Math.random() - 0.5) * 114;
+            if (!inForest(x, z)) continue;
+            const mist = new THREE.Mesh(new THREE.CircleGeometry(2.5 + Math.random() * 3, 16), mistMat);
+            mist.rotation.x = -Math.PI / 2;
+            mist.position.set(x, 0.15 + Math.random() * 0.5, z);
+            this.scene.add(mist);
+        }
+
+        // 森林萤火虫（白天也亮，区别于村庄夜萤）
+        for (let i = 0; i < 24; i++) {
+            const x = -74 - Math.random() * 100;
+            const z = (Math.random() - 0.5) * 110;
+            const body = new THREE.Mesh(
+                new THREE.SphereGeometry(0.09, 6, 6),
+                new STD_MAT({ color: 0xaef0c0, emissive: 0x88e0a0, emissiveIntensity: 2.5 })
+            );
+            body.position.set(x, 1 + Math.random() * 2.6, z);
+            body.userData = {
+                home: body.position.clone(), phase: Math.random() * Math.PI * 2,
+                speed: 0.4 + Math.random() * 0.4, radius: 1.5 + Math.random() * 2.2,
+                forest: true,   // 不受夜晚门控
+            };
+            this.scene.add(body);
+            this.fireflies.push(body);
+        }
+    }
+
+    // 发光大蘑菇（森林专用，伞盖自发光）
+    _addGlowMushroom(x, z) {
+        const group = new THREE.Group();
+        const glowCol = [0x66e0ff, 0xb98cff, 0x9bff8c][Math.floor(Math.random() * 3)];
+        const h = 0.5 + Math.random() * 0.6;
+        const stem = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.12, 0.16, h, 8),
+            new THREE.MeshToonMaterial({ color: 0xf0e8de })
+        );
+        stem.position.y = h / 2;
+        addOutline(stem, 0.04);
+        group.add(stem);
+        const cap = new THREE.Mesh(
+            new THREE.SphereGeometry(0.42, 14, 9, 0, Math.PI * 2, 0, Math.PI / 2),
+            new STD_MAT({ color: glowCol, emissive: glowCol, emissiveIntensity: 1.3 })
+        );
+        cap.position.y = h;
+        cap.scale.y = 0.7;
+        group.add(cap);
+        group.position.set(x, 0, z);
+        group.scale.setScalar(0.8 + Math.random() * 1.0);
+        this.scene.add(group);
+    }
+
+    // 精灵树：粗树干 + 发光树冠（森林中心地标）
+    _addSpiritTree(x, z) {
+        const group = new THREE.Group();
+        const trunk = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.7, 1.1, 6, 10),
+            new THREE.MeshToonMaterial({ color: 0x6a4a30 })
+        );
+        trunk.position.y = 3;
+        trunk.castShadow = true;
+        addOutline(trunk, 0.03);
+        group.add(trunk);
+        // 发光树冠（几团叠球，淡青绿自发光）
+        const canopyMat = new STD_MAT({ color: 0x7be0a8, emissive: 0x4fb98a, emissiveIntensity: 0.9 });
+        for (const c of [[0, 6.4, 0, 3.0], [-1.8, 5.6, 0.6, 2.2], [1.7, 5.7, -0.5, 2.0], [0.3, 7.4, 0.2, 2.0]]) {
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(c[3], 14, 10), canopyMat);
+            ball.position.set(c[0], c[1], c[2]);
+            group.add(ball);
+        }
+        group.position.set(x, 0, z);
+        this.scene.add(group);
+        this._spiritTree = group;
+        // 树干登记碰撞
+        this.obstacles.push({
+            min: new THREE.Vector3(x - 1.1, 0, z - 1.1),
+            max: new THREE.Vector3(x + 1.1, 5, z + 1.1),
+        });
     }
 
     _buildPlayer() {
