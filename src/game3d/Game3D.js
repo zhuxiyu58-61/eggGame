@@ -890,6 +890,7 @@ export class Game3D {
         this._buildBunnies();
         this._buildBenches();
         this._buildLampposts();
+        this._addVillageLife();
         this._buildCollectibleStars();
         this._scatterMushrooms();
         this._buildHotAirBalloon();
@@ -8920,6 +8921,105 @@ export class Game3D {
             patch.position.set(x, 0.018 + Math.random() * 0.006, z);
             patch.receiveShadow = true;
             this.scene.add(patch);
+        }
+    }
+
+    // 村庄生活感：石井 / 木桶 / 木箱 / 路牌 / 小菜园，摆在广场四角的路与路之间（避开广场和路）
+    _addVillageLife() {
+        const wood = new THREE.MeshToonMaterial({ color: 0x8a5a32 });
+        const woodDark = new THREE.MeshToonMaterial({ color: 0x664022 });
+        const band = new THREE.MeshToonMaterial({ color: 0x4a3018 });
+
+        // —— 石井 (10, 9) ——
+        {
+            const g = new THREE.Group();
+            const stone = new THREE.MeshToonMaterial({ color: 0xb8b2a4 });
+            const base = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.15, 0.85, 14), stone);
+            base.position.y = 0.42; base.castShadow = true; addOutline(base, 0.03); g.add(base);
+            const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 0.05, 14), new THREE.MeshToonMaterial({ color: 0x1a2230 }));
+            hole.position.y = 0.86; g.add(hole);
+            for (const sx of [-1, 1]) {
+                const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1.5, 6), wood);
+                post.position.set(sx * 0.85, 1.5, 0); g.add(post);
+            }
+            const roof = new THREE.Mesh(new THREE.ConeGeometry(1.3, 0.7, 4), new THREE.MeshToonMaterial({ color: 0xa84030 }));
+            roof.position.y = 2.5; roof.rotation.y = Math.PI / 4; addOutline(roof, 0.03); g.add(roof);
+            const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1.7, 6), woodDark);
+            bar.rotation.z = Math.PI / 2; bar.position.y = 2.0; g.add(bar);
+            const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.3, 10), wood);
+            bucket.position.set(0.3, 1.3, 0); addOutline(bucket, 0.02); g.add(bucket);
+            const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 4), band);
+            rope.position.set(0.3, 1.65, 0); g.add(rope);
+            g.position.set(10, 0, 9); this.scene.add(g);
+            this._addPropCollider(10, 9, 1.2, 2.8);
+        }
+
+        // —— 木桶堆 (-9, 9) ——
+        const barrel = (bx, bz, by = 0) => {
+            const g = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.36, 0.9, 12), wood);
+            body.position.y = 0.45; body.castShadow = true; addOutline(body, 0.03); g.add(body);
+            for (const ry of [0.2, 0.7]) {
+                const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.04, 6, 14), band);
+                ring.rotation.x = Math.PI / 2; ring.position.y = ry; g.add(ring);
+            }
+            g.position.set(bx, by, bz); this.scene.add(g);
+        };
+        barrel(-9, 9); barrel(-8.1, 9.4); barrel(-8.6, 8.5, 0.9);
+        this._addPropCollider(-8.5, 9, 1.1, 1.0);
+
+        // —— 木箱堆 (9, -9) ——
+        const crate = (cx, cy, cz, s) => {
+            const box = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), wood);
+            box.position.set(cx, cy, cz); box.rotation.y = Math.random() * 0.5; box.castShadow = true;
+            addOutline(box, 0.03); this.scene.add(box);
+            // 钉条
+            const edge = new THREE.Mesh(new THREE.BoxGeometry(s + 0.02, s * 0.12, s + 0.02), woodDark);
+            edge.position.set(cx, cy + s * 0.3, cz); edge.rotation.y = box.rotation.y; this.scene.add(edge);
+        };
+        crate(9, 0.4, -9, 0.8); crate(9.7, 0.35, -8.4, 0.7); crate(9.1, 1.1, -9, 0.6);
+        this._addPropCollider(9.3, -8.8, 1.0, 1.6);
+
+        // —— 路牌 (6, 6) 指向四个区 ——
+        {
+            const g = new THREE.Group();
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 2.0, 7), woodDark);
+            post.position.y = 1.0; addOutline(post, 0.03); g.add(post);
+            const dirs = [
+                { c: 0xbfe4ff, y: 1.75, ry: 2.2 },   // 雪原
+                { c: 0xffd24a, y: 1.45, ry: -0.6 },  // 沙漠
+                { c: 0x9bff8c, y: 1.15, ry: 3.6 },   // 森林
+                { c: 0x9ec4ff, y: 0.85, ry: 0.8 },   // 湖
+            ];
+            for (const d of dirs) {
+                const board = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.26, 0.06), new THREE.MeshToonMaterial({ color: d.c }));
+                board.position.set(0.4, d.y, 0); board.castShadow = true; addOutline(board, 0.02);
+                const arm = new THREE.Group(); arm.rotation.y = d.ry; arm.add(board); g.add(arm);
+            }
+            g.position.set(6, 0, 6); this.scene.add(g);
+            this._addPropCollider(6, 6, 0.4, 2.0);
+        }
+
+        // —— 小菜园 (-9, -9)：土畦 + 几行小菜 + 红萝卜叶 ——
+        {
+            const g = new THREE.Group();
+            const soil = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.16, 2.2), new THREE.MeshToonMaterial({ color: 0x6e4a2c }));
+            soil.position.y = 0.08; soil.receiveShadow = true; addOutline(soil, 0.02); g.add(soil);
+            const veggieCols = [0x4f9a4a, 0x6cb56c, 0x86c074];
+            for (let row = -1; row <= 1; row++) {
+                const ridge = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.1, 0.4), new THREE.MeshToonMaterial({ color: 0x5a3c22 }));
+                ridge.position.set(0, 0.18, row * 0.7); g.add(ridge);
+                for (let i = -2; i <= 2; i++) {
+                    const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.14, 6, 5), new THREE.MeshToonMaterial({ color: veggieCols[(i + 2) % 3] }));
+                    leaf.scale.y = 1.3; leaf.position.set(i * 0.55, 0.32, row * 0.7); g.add(leaf);
+                }
+            }
+            // 一个小篱笆角
+            for (const c of [[-1.6, -1.1], [1.6, -1.1], [-1.6, 1.1], [1.6, 1.1]]) {
+                const stake = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.7, 5), wood);
+                stake.position.set(c[0], 0.35, c[1]); g.add(stake);
+            }
+            g.position.set(-9, 0, -9); g.rotation.y = 0.3; this.scene.add(g);
         }
     }
 
