@@ -1919,11 +1919,11 @@ export class Game3D {
             story: '🔥 把暖灯火种交给了小雪精灵！它不冷了，笑啦～',
         });
         this._addQuestItem({
-            key: 'springpearl', region: 'desert', x: 40, z: 186,
-            color: 0x66e0ff, emissive: 0x3399cc, emoji: '💧', label: '清泉之珠',
+            key: 'sungem', region: 'desert', x: 40, z: 186,
+            color: 0xffd24a, emissive: 0xff9a3c, emoji: '☀️', label: '太阳宝石',
             guard: { x: 40, z: 181, type: 'tank' },
             giver: '_travelerRec', giverLabel: '沙漠旅人', deliver: { x: -30, z: 114 },
-            story: '💧 把清泉之珠交给旅人！绿洲重新冒出清泉啦～',
+            story: '☀️ 把太阳宝石放回金字塔！暖暖的阳光照回来，沙漠开花啦～',
         });
         this._addQuestItem({
             key: 'moonstone', region: 'lake', x: 60, z: -54,
@@ -1965,13 +1965,6 @@ export class Game3D {
             borderLeft: '4px solid #ffd24a',
         });
         document.body.appendChild(this._objChip);
-
-        // 去掉绿洲那颗装饰宝珠，免得跟"清泉之珠"混淆（真正的珠子在沙漠深处）
-        if (this._oasisGem) {
-            this.scene.remove(this._oasisGem);
-            this._oasisGem.geometry.dispose(); this._oasisGem.material.dispose();
-            this._oasisGem = null;
-        }
 
         this._updateQuestHud();
 
@@ -2153,9 +2146,9 @@ export class Game3D {
             if (this._snowSpriteMouth) this._snowSpriteMouth.rotation.z = Math.PI;
             this._setStoryLine(this._snowSpriteRec, '谢谢你，小蛋！暖和多啦～(*^▽^*)');
         }
-        if (it.key === 'springpearl') {
-            this._reviveOasis();
-            if (this._travelerRec) this._setStoryLine(this._travelerRec, '哇，清泉之珠！绿洲活过来啦，太谢谢你了！');
+        if (it.key === 'sungem') {
+            this._bloomDesert();
+            if (this._travelerRec) this._setStoryLine(this._travelerRec, '太阳宝石回来了！你看，暖阳照得沙漠都开花了，谢谢你！');
         }
         if (it.key === 'moonstone' && this._turtleRec) {
             this._setStoryLine(this._turtleRec, '谢谢你，小蛋。夜里它会照亮回家的路～');
@@ -2257,7 +2250,7 @@ export class Game3D {
                  text-shadow:0 3px 16px rgba(255,180,80,0.8);margin:8px 0">钟楼亮啦！</div>
             <div style="font-size:24px;color:#ffe6a0;margin-bottom:6px">你做到了，蛋蛋！🥚✨</div>
             <div style="font-size:17px;color:#cfc4e0;max-width:80vw;line-height:1.6;margin-bottom:26px">
-                你打败了四个守卫，把火种、清泉之珠、月光石、星光草<br>都带回了村庄，钟声又响起来了，大家都笑了 🎉</div>
+                你打败了四个守卫，把火种、太阳宝石、月光石、星光草<br>都带回了村庄，钟声又响起来了，大家都笑了 🎉</div>
             <button id="win-continue" style="font-size:20px;font-weight:bold;color:#fff;
                  padding:12px 32px;border:none;border-radius:999px;cursor:pointer;
                  background:linear-gradient(90deg,#ff9ec4,#ffd24a);box-shadow:0 6px 20px rgba(0,0,0,0.3)">
@@ -3426,6 +3419,9 @@ export class Game3D {
         this.scene.add(igloo);
         // 不做障碍，蛋可以走过去（屋是装饰）
 
+        // 暖融融的雪顶小木屋（深雪原里一座有灯的小屋，比冰屋更像"家"）
+        this._buildSnowCabin(-50, -122);
+
         // 几个雪人（永驻雪地，跟天气雪人不同）— 铺到更深的雪原里
         for (const sp of [[15, -75], [-15, -95], [40, -100], [-60, -135], [55, -150], [0, -165]]) {
             this._addSnowman(sp[0], sp[1]);
@@ -3437,8 +3433,93 @@ export class Game3D {
         }
     }
 
+    // 雪原小木屋：木墙 + 雪盖屋顶 + 发光暖窗 + 烟囱 + 门，门口堆点雪
+    _buildSnowCabin(x, z) {
+        const group = new THREE.Group();
+        const W = 3.4, H = 2.2, D = 2.8;
+        // 木墙
+        const walls = new THREE.Mesh(
+            new THREE.BoxGeometry(W, H, D),
+            new THREE.MeshToonMaterial({ color: 0x8a5a3a })
+        );
+        walls.position.y = H / 2;
+        walls.castShadow = true;
+        addOutline(walls, 0.03);
+        group.add(walls);
+        // 横木纹（几条深色细条）
+        for (let i = 1; i <= 3; i++) {
+            const line = new THREE.Mesh(
+                new THREE.BoxGeometry(W + 0.02, 0.06, D + 0.02),
+                new THREE.MeshToonMaterial({ color: 0x6a4326 })
+            );
+            line.position.y = (H / 4) * i;
+            group.add(line);
+        }
+        // 雪盖屋顶（四坡锥，白雪）
+        const roof = new THREE.Mesh(
+            new THREE.ConeGeometry(W * 0.85, 1.7, 4),
+            new THREE.MeshToonMaterial({ color: 0xf6f9ff })
+        );
+        roof.position.y = H + 0.85;
+        roof.rotation.y = Math.PI / 4;
+        roof.castShadow = true;
+        addOutline(roof, 0.04);
+        group.add(roof);
+        // 门（深色，朝 +Z）
+        const door = new THREE.Mesh(
+            new THREE.BoxGeometry(0.9, 1.4, 0.1),
+            new THREE.MeshToonMaterial({ color: 0x5a3a22 })
+        );
+        door.position.set(0, 0.7, D / 2 + 0.02);
+        addOutline(door, 0.03);
+        group.add(door);
+        // 发光暖窗（一眼看出"有人住、暖和"）
+        const win = new THREE.Mesh(
+            new THREE.BoxGeometry(0.7, 0.7, 0.1),
+            new THREE.MeshToonMaterial({ color: 0xffe08a, emissive: 0xffc04a, emissiveIntensity: 1.1 })
+        );
+        win.position.set(-W / 2 - 0.01, 1.2, 0.2);
+        win.rotation.y = Math.PI / 2;
+        group.add(win);
+        const winLight = new THREE.PointLight(0xffd27a, 0.6, 6);
+        winLight.position.set(-W / 2 - 0.5, 1.2, 0.2);
+        group.add(winLight);
+        // 烟囱 + 一缕静态雪烟
+        const chimney = new THREE.Mesh(
+            new THREE.BoxGeometry(0.4, 0.7, 0.4),
+            new THREE.MeshToonMaterial({ color: 0x6a4326 })
+        );
+        chimney.position.set(W * 0.3, H + 1.0, -D * 0.2);
+        group.add(chimney);
+        for (let i = 0; i < 3; i++) {
+            const puff = new THREE.Mesh(
+                new THREE.SphereGeometry(0.18 + i * 0.05, 8, 6),
+                new THREE.MeshToonMaterial({ color: 0xeef2f6, transparent: true, opacity: 0.5 - i * 0.12 })
+            );
+            puff.position.set(W * 0.3 + i * 0.1, H + 1.5 + i * 0.4, -D * 0.2);
+            group.add(puff);
+        }
+        // 门口堆雪
+        const snowMat = new THREE.MeshToonMaterial({ color: 0xf6f9ff });
+        for (const sx of [-1, 1]) {
+            const pile = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 8), snowMat);
+            pile.scale.set(1.1, 0.4, 1.1);
+            pile.position.set(sx * W * 0.45, 0.1, D * 0.5);
+            group.add(pile);
+        }
+
+        group.position.set(x, 0, z);
+        group.rotation.y = 0.25;
+        this.scene.add(group);
+        // 墙体碰撞（绕着走）
+        this.obstacles.push({
+            min: new THREE.Vector3(x - W / 2, 0, z - D / 2),
+            max: new THREE.Vector3(x + W / 2, H, z + D / 2),
+        });
+    }
+
     _buildDesertBiome() {
-        // 南边 (z > +78) 进入太阳沙漠：暖沙地 + 仙人掌 + 沙丘 + 干涸绿洲 + 沙岩金字塔
+        // 南边 (z > +78) 进入太阳沙漠：暖沙地 + 仙人掌 + 沙丘 + 旱地 + 沙岩金字塔
         // （起点压在 z78 之后，给村屋 z58 / 后院金币 z67 留出缓冲）
         const sandGround = new THREE.Mesh(
             new THREE.PlaneGeometry(212, 124),
@@ -3493,7 +3574,7 @@ export class Game3D {
             this.scene.add(dune);
         }
 
-        // 干涸的绿洲：龟裂土圈 + 仅剩一小汪水 + 几棵蔫椰子树（呼应「清泉之珠被埋」故事）
+        // 旱地（龟裂土圈 + 几棵蔫椰子树）：放回太阳宝石后会被暖阳照得长草开花
         const oasisX = -30, oasisZ = 116;
         const crackedEarth = new THREE.Mesh(
             new THREE.CircleGeometry(9, 32),
@@ -3502,27 +3583,11 @@ export class Game3D {
         crackedEarth.rotation.x = -Math.PI / 2;
         crackedEarth.position.set(oasisX, 0.045, oasisZ);
         this.scene.add(crackedEarth);
-        // 仅剩的一小汪水（暗示快干了）
-        const puddle = new THREE.Mesh(
-            new THREE.CircleGeometry(2.4, 24),
-            new STD_MAT({ color: 0x5fb9c4, metalness: 0.1, roughness: 0.4, transparent: true, opacity: 0.85 })
-        );
-        puddle.rotation.x = -Math.PI / 2;
-        puddle.position.set(oasisX, 0.06, oasisZ);
-        this.scene.add(puddle);
         this._addPalmTree(oasisX - 5, oasisZ - 2, 0.12);
         this._addPalmTree(oasisX + 4, oasisZ + 3, -0.18);
         this._addPalmTree(oasisX + 6, oasisZ - 4, 0.1);
-        // 半埋的「清泉之珠」微光（留给下次任务主线接，先做个发光暗示）
-        const gem = new THREE.Mesh(
-            new THREE.SphereGeometry(0.5, 16, 12),
-            new STD_MAT({ color: 0x66e0ff, emissive: 0x3399cc, emissiveIntensity: 1.2, transparent: true, opacity: 0.9 })
-        );
-        gem.position.set(oasisX + 1.5, 0.2, oasisZ + 5);
-        this.scene.add(gem);
-        this._oasisGem = gem;
 
-        // 沙岩金字塔（沙漠地标，呼应雪区的冰屋）
+        // 沙岩金字塔（沙漠地标，太阳宝石归位后会发亮）
         const pyramid = new THREE.Mesh(
             new THREE.ConeGeometry(7, 9, 4),
             new THREE.MeshToonMaterial({ color: 0xd9b878 })
@@ -3532,6 +3597,7 @@ export class Game3D {
         pyramid.castShadow = true;
         addOutline(pyramid, 0.05);
         this.scene.add(pyramid);
+        this._pyramid = pyramid;
         // 金字塔登记碰撞（蛋绕着走，不穿过）
         this.obstacles.push({
             min: new THREE.Vector3(34 - 5, 0, 110 - 5),
@@ -3637,15 +3703,10 @@ export class Game3D {
             pos.setX(i, pos.getX(i) + Math.sin(t * 0.8 + this._dustPhase[i]) * dt * 0.5);
         }
         pos.needsUpdate = true;
-        // 半埋的清泉之珠呼吸式微光
-        if (this._oasisGem) {
-            this._oasisGem.material.emissiveIntensity = 0.8 + Math.sin(t * 2) * 0.5;
-        }
-        // 绿洲复活渐显（收到清泉之珠后）
+        // 沙漠开花渐显（放回太阳宝石后）
         if (this._oasisFx) {
             const fx = this._oasisFx;
             fx.t = Math.min(1, fx.t + dt * 0.5);
-            fx.pond.material.opacity = 0.85 * fx.t;
             fx.grassRing.material.opacity = 0.9 * fx.t;
             for (const f of fx.flowers) f.material.opacity = fx.t;
         }
@@ -3662,7 +3723,7 @@ export class Game3D {
         // 每个区域的进区故事旁白 + 色调
         this._regionMeta = {
             snow:   { story: '❄️ 冰雪国<br>好冷呀～雪原好大，走好久都走不到头。<br>去找哆嗦的小雪精灵，它需要帮忙…' },
-            desert: { story: '🔥 太阳沙漠<br>好热！一望无际的沙海。<br>绿洲边有个渴坏了的旅人在等人帮忙…' },
+            desert: { story: '☀️ 太阳沙漠<br>一望无际的沙海，天却灰蒙蒙的。<br>金字塔的太阳宝石丢了，旅人在等人帮忙…' },
             lake:   { story: '🌊 月光湖<br>水边好清凉～<br>湖底的老乌龟好像在找什么东西。' },
             forest: { story: '🌲 萤火森林<br>雾蒙蒙的，到处是会发光的蘑菇和萤火虫。<br>森林深处的小精灵在找一样宝贝…' },
             home:   { story: '🌿 回到温暖的村庄，真舒服~<br>去广场找蛋爷爷问问该做什么。' },
@@ -7838,7 +7899,7 @@ export class Game3D {
         );
     }
 
-    // 沙漠绿洲·沙漠旅人（渴坏了，求人取回清泉之珠）——在干涸绿洲旁
+    // 沙漠·沙漠旅人（天阴沙暴起，求人取回太阳宝石）——在金字塔旁的旱地
     _buildDesertTraveler() {
         const group = new THREE.Group();
         const body = new THREE.Mesh(
@@ -7872,7 +7933,7 @@ export class Game3D {
         group.position.set(-30, 0, 114);
         this.scene.add(group);
         this._travelerRec = this._attachStoryNpc(
-            group, '沙漠旅人', '渴死了…清泉之珠在沙漠最深处，被守卫怪看着。帮我抢回来，绿洲就能复活！', 2.0, 2.9
+            group, '沙漠旅人', '天一直灰蒙蒙的，好闷…太阳宝石在沙漠最深处，被守卫怪看着。帮我抢回来放回金字塔，阳光就回来啦！', 2.0, 2.9
         );
     }
 
@@ -7946,41 +8007,41 @@ export class Game3D {
         );
     }
 
-    // 沙漠绿洲复活（收到清泉之珠后触发）：水洼变大池 + 绿草圈 + 冒花
-    _reviveOasis() {
-        if (this._oasisRevived) return;
-        this._oasisRevived = true;
+    // 沙漠开花（放回太阳宝石后触发）：暖阳金光 + 旱地长草冒花 + 金字塔发亮（不再是水）
+    _bloomDesert() {
+        if (this._desertBloomed) return;
+        this._desertBloomed = true;
         const ox = -30, oz = 116;  // 与 _buildDesertBiome 的 oasisX/oasisZ 一致
-        const pond = new THREE.Mesh(
-            new THREE.CircleGeometry(6, 32),
-            new STD_MAT({ color: 0x4fc4d8, metalness: 0.1, roughness: 0.35, transparent: true, opacity: 0 })
-        );
-        pond.rotation.x = -Math.PI / 2;
-        pond.position.set(ox, 0.07, oz);
-        this.scene.add(pond);
+        // 旱地铺一圈嫩草（阳光带来生机）
         const grassRing = new THREE.Mesh(
-            new THREE.RingGeometry(6, 9, 32),
-            new THREE.MeshToonMaterial({ color: 0x6cba5a, transparent: true, opacity: 0, side: THREE.DoubleSide })
+            new THREE.CircleGeometry(8, 32),
+            new THREE.MeshToonMaterial({ color: 0x7cc25a, transparent: true, opacity: 0, side: THREE.DoubleSide })
         );
         grassRing.rotation.x = -Math.PI / 2;
-        grassRing.position.set(ox, 0.06, oz);
+        grassRing.position.set(ox, 0.05, oz);
         this.scene.add(grassRing);
-        const flowerColors = [0xff7ab0, 0xffd24a, 0xff6f5a, 0xc77bff];
+        // 一片花海
+        const flowerColors = [0xff7ab0, 0xffd24a, 0xff6f5a, 0xc77bff, 0xffffff];
         const flowers = [];
-        for (let i = 0; i < 12; i++) {
-            const a = Math.random() * Math.PI * 2, r = 6.4 + Math.random() * 2.4;
+        for (let i = 0; i < 20; i++) {
+            const a = Math.random() * Math.PI * 2, r = Math.random() * 7.4;
             const f = new THREE.Mesh(
-                new THREE.SphereGeometry(0.18, 8, 6),
-                new THREE.MeshToonMaterial({ color: flowerColors[i % 4], transparent: true, opacity: 0 })
+                new THREE.SphereGeometry(0.2, 8, 6),
+                new THREE.MeshToonMaterial({ color: flowerColors[i % 5], transparent: true, opacity: 0 })
             );
-            f.position.set(ox + Math.cos(a) * r, 0.2, oz + Math.sin(a) * r);
+            f.position.set(ox + Math.cos(a) * r, 0.22, oz + Math.sin(a) * r);
             f.scale.y = 0.6;
             this.scene.add(f);
             flowers.push(f);
         }
-        this._oasisFx = { pond, grassRing, flowers, t: 0 };
+        // 金字塔点亮成暖金（太阳宝石归位）
+        if (this._pyramid) {
+            this._pyramid.material.emissive = new THREE.Color(0xffb347);
+            this._pyramid.material.emissiveIntensity = 0.6;
+        }
+        this._oasisFx = { grassRing, flowers, t: 0 };
         this._playWin();
-        this._showEasterBadge('🌿 绿洲活过来啦！清泉重新冒水了～');
+        this._showEasterBadge('🌼 暖阳照回来啦！沙漠开出一片花海～');
     }
 
     _updateAnimDecor() {
