@@ -808,16 +808,43 @@ export class Game3D {
             { sx: 48, sz: 6,  x: 28,  z: 0,   name: '东方粉星' },
             { sx: 48, sz: 6,  x: -28, z: 0,   name: '西方蓝星' },
         ];
+        const stoneMat = new THREE.MeshToonMaterial({ color: 0xb8b2a4 });
         pathDefs.forEach(p => {
+            // 深色泥边（略宽，垫在下面当路肩）
+            const edge = new THREE.Mesh(
+                new THREE.PlaneGeometry(p.sx + 1.2, p.sz + 1.2),
+                new THREE.MeshToonMaterial({ color: 0x9a7b4e })
+            );
+            edge.rotation.x = -Math.PI / 2;
+            edge.position.set(p.x, 0.012, p.z);
+            edge.receiveShadow = true;
+            this.scene.add(edge);
+            // 土路主体（暖泥色，不再是淡绿平条）
             const path = new THREE.Mesh(
                 new THREE.PlaneGeometry(p.sx, p.sz),
-                new THREE.MeshToonMaterial({ color: 0xc9ecb0 })
+                new THREE.MeshToonMaterial({ color: 0xc9b083 })
             );
             path.rotation.x = -Math.PI / 2;
             path.position.set(p.x, 0.015, p.z);
             path.receiveShadow = true;
             this.scene.add(path);
             this.paths[p.name] = path;
+            // 沿路撒扁平踩脚石，像走出来的小道
+            const vertical = p.sz > p.sx;
+            const len = vertical ? p.sz : p.sx;
+            const n = Math.floor(len / 3);
+            for (let i = 0; i < n; i++) {
+                const t = (i + 0.5) / n - 0.5;
+                const along = t * (len - 1.5);
+                const jitter = (Math.random() - 0.5) * (vertical ? p.sx : p.sz) * 0.5;
+                const sx2 = vertical ? p.x + jitter : p.x + along;
+                const sz2 = vertical ? p.z + along : p.z + jitter;
+                const st = new THREE.Mesh(new THREE.CylinderGeometry(0.35 + Math.random() * 0.3, 0.4 + Math.random() * 0.3, 0.08, 7), stoneMat);
+                st.scale.set(1, 1, 0.8 + Math.random() * 0.4);
+                st.rotation.y = Math.random() * Math.PI;
+                st.position.set(sx2, 0.05, sz2);
+                this.scene.add(st);
+            }
         });
 
         // 远景装饰：一圈小山
@@ -8775,18 +8802,35 @@ export class Game3D {
     }
 
     _addStone(x, z) {
-        const size = 0.18 + Math.random() * 0.35;
-        const stone = new THREE.Mesh(
-            new THREE.SphereGeometry(size, 8, 6),
-            new THREE.MeshToonMaterial({ color: 0xaab0a8 })
-        );
-        stone.scale.y = 0.55;
-        stone.position.set(x, size * 0.35, z);
-        stone.rotation.y = Math.random() * Math.PI * 2;
-        stone.castShadow = true;
-        stone.receiveShadow = true;
-        addOutline(stone, 0.05);
-        this.scene.add(stone);
+        // 一小簇有棱角的石头：1~3 块，大小/颜色/朝向都不同，偶尔带苔
+        const group = new THREE.Group();
+        const rockCols = [0x9aa0a8, 0xaab0a8, 0x8a8e88, 0xb0a890, 0x7f857f];
+        const cluster = 1 + ((Math.random() * 3) | 0);
+        for (let i = 0; i < cluster; i++) {
+            const size = 0.18 + Math.random() * (i === 0 ? 0.4 : 0.22);
+            const rock = new THREE.Mesh(
+                new THREE.DodecahedronGeometry(size, 0),
+                new THREE.MeshToonMaterial({ color: rockCols[(Math.random() * rockCols.length) | 0] })
+            );
+            rock.scale.set(1, 0.6 + Math.random() * 0.4, 0.85 + Math.random() * 0.3);
+            rock.rotation.set(Math.random() * 0.5, Math.random() * Math.PI * 2, Math.random() * 0.5);
+            const off = i === 0 ? 0 : 0.25 + Math.random() * 0.35;
+            const oa = Math.random() * Math.PI * 2;
+            rock.position.set(Math.cos(oa) * off, size * 0.4, Math.sin(oa) * off);
+            rock.castShadow = true; rock.receiveShadow = true;
+            addOutline(rock, 0.05);
+            group.add(rock);
+            // 偶尔在石头上抹点苔
+            if (Math.random() < 0.3) {
+                const moss = new THREE.Mesh(new THREE.SphereGeometry(size * 0.5, 6, 5, 0, Math.PI * 2, 0, Math.PI / 2),
+                    new THREE.MeshToonMaterial({ color: 0x5f9a4f }));
+                moss.scale.y = 0.4;
+                moss.position.set(rock.position.x, size * 0.7, rock.position.z);
+                group.add(moss);
+            }
+        }
+        group.position.set(x, 0, z);
+        this.scene.add(group);
     }
 
     _addFlower(x, z) {
