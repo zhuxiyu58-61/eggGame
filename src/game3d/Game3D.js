@@ -1144,9 +1144,10 @@ export class Game3D {
         );
         pillow.position.set(W / 2 - 0.85, 0.63, -0.7);
         group.add(pillow);
+        const blanketCols = [0xc8a8ff, 0x8fc6ff, 0xffc0d8, 0xffe08a];
         const blanket = new THREE.Mesh(
             new THREE.BoxGeometry(1.10, 0.06, 1.2),
-            new THREE.MeshToonMaterial({ color: 0xc8a8ff })
+            new THREE.MeshToonMaterial({ color: blanketCols[idx % 4] })
         );
         blanket.position.set(W / 2 - 0.85, 0.58, 0.3);
         group.add(blanket);
@@ -1156,14 +1157,18 @@ export class Game3D {
             max: new THREE.Vector3(x + W / 2 - 0.3, 1.2, z + 1.0),
         });
 
-        // 地毯
+        // 地毯（每间配色不同）
+        const rugCols = [0xc04848, 0x4a78c0, 0x7a4ab0, 0x4aa86a];
         const rug = new THREE.Mesh(
             new THREE.CircleGeometry(1.0, 24),
-            new THREE.MeshToonMaterial({ color: 0xc04848 })
+            new THREE.MeshToonMaterial({ color: rugCols[idx % 4] })
         );
         rug.rotation.x = -Math.PI / 2;
         rug.position.set(0, 0.07, 0);
         group.add(rug);
+
+        // ===== 每间一个主题角：厨房 / 书房 / 花房 / 玩具间 =====
+        this._addHouseTheme(group, W, H, D, idx);
 
         // ===== 屋外生活化装饰（每间按 idx 差异化）=====
         this._addHouseLife(group, W, H, D, doorW, doorH, idx);
@@ -1192,6 +1197,65 @@ export class Game3D {
             currentOpacity: 1,
             lamp: this._lastHouseLamp,   // 夜里进屋自动开的灯
         });
+    }
+
+    // 室内主题角：让 4 间房一进去就不一样（厨房/书房/花房/玩具间），靠左后角摆
+    _addHouseTheme(group, W, H, D, idx) {
+        const cx = -W / 2 + 1.0, cz = -D / 2 + 0.7;   // 左后角
+        const wood = new THREE.MeshToonMaterial({ color: 0x9a6a3a });
+        const theme = idx % 4;
+        if (theme === 0) {
+            // 厨房：灶台 + 发光灶火 + 锅 + 墙架瓶罐
+            const stove = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.0, 0.7), new THREE.MeshToonMaterial({ color: 0x6f7378 }));
+            stove.position.set(cx, 0.5, cz); addOutline(stove, 0.03); group.add(stove);
+            const burner = new THREE.Mesh(new THREE.CircleGeometry(0.2, 16), new STD_MAT({ color: 0xff7a2a, emissive: 0xff5a1a, emissiveIntensity: 1.6 }));
+            burner.rotation.x = -Math.PI / 2; burner.position.set(cx - 0.3, 1.01, cz); group.add(burner);
+            const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.18, 0.26, 12), new THREE.MeshToonMaterial({ color: 0x33363a }));
+            pot.position.set(cx + 0.3, 1.14, cz); group.add(pot);
+            const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.3), wood);
+            shelf.position.set(cx, 1.9, cz - 0.2); group.add(shelf);
+            for (let i = 0; i < 3; i++) {
+                const jar = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.24, 8), new THREE.MeshToonMaterial({ color: [0xff8fb8, 0x8fc6ff, 0xffe08a][i] }));
+                jar.position.set(cx - 0.4 + i * 0.4, 2.05, cz - 0.2); group.add(jar);
+            }
+        } else if (theme === 1) {
+            // 书房：书架(彩色书脊) + 小书桌 + 台灯发光
+            const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.0, 0.4), wood);
+            shelf.position.set(cx, 1.0, cz); addOutline(shelf, 0.03); group.add(shelf);
+            const bookCols = [0xff6f5a, 0x6fb3ff, 0xffd24a, 0x86c074, 0xc77bff];
+            for (let row = 0; row < 3; row++) for (let i = 0; i < 6; i++) {
+                const book = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.34, 0.28), new THREE.MeshToonMaterial({ color: bookCols[(i + row) % 5] }));
+                book.position.set(cx - 0.6 + i * 0.22, 0.5 + row * 0.6, cz + 0.08); group.add(book);
+            }
+            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.1, 0.6), wood);
+            desk.position.set(cx + 1.4, 0.8, cz + 0.4); group.add(desk);
+            const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), new STD_MAT({ color: 0xfff0a0, emissive: 0xffd24a, emissiveIntensity: 1.4 }));
+            lamp.position.set(cx + 1.7, 1.0, cz + 0.4); group.add(lamp);
+        } else if (theme === 2) {
+            // 花房：一排陶盆绿植 + 挂花
+            for (let i = 0; i < 4; i++) {
+                const px = cx - 0.5 + i * 0.6;
+                const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.34, 10), new THREE.MeshToonMaterial({ color: 0xc06a40 }));
+                pot.position.set(px, 0.5, cz); addOutline(pot, 0.02); group.add(pot);
+                const bush = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), new THREE.MeshToonMaterial({ color: [0x5aa84f, 0x6cb56c, 0x4f9a4a][i % 3] }));
+                bush.position.set(px, 0.85, cz); group.add(bush);
+                const fl = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), new THREE.MeshToonMaterial({ color: [0xff7ab0, 0xffd24a, 0xff6f5a, 0xc77bff][i] }));
+                fl.position.set(px, 1.05, cz); group.add(fl);
+            }
+        } else {
+            // 玩具间：玩具箱 + 散落彩球 + 积木塔
+            const box = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.7, 0.7), new THREE.MeshToonMaterial({ color: 0xff8a4a }));
+            box.position.set(cx, 0.35, cz); addOutline(box, 0.03); group.add(box);
+            const ballCols = [0xff5a6a, 0x5aa9ff, 0xffd24a, 0x6fd39a, 0xc77bff];
+            for (let i = 0; i < 5; i++) {
+                const ball = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.MeshToonMaterial({ color: ballCols[i] }));
+                ball.position.set(cx + 0.6 + Math.random() * 1.2, 0.16, cz + Math.random() * 1.2); group.add(ball);
+            }
+            for (let i = 0; i < 3; i++) {
+                const blk = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.26, 0.26), new THREE.MeshToonMaterial({ color: ballCols[i] }));
+                blk.position.set(cx + 0.4, 0.13 + i * 0.26, cz + 1.0); group.add(blk);
+            }
+        }
     }
 
     // 屋外生活化装饰：门口地垫/盆栽/挂灯 + 窗台花箱 + 柴火堆或水桶 + 屋檐小彩旗
@@ -3433,88 +3497,127 @@ export class Game3D {
         }
     }
 
-    // 雪原小木屋：木墙 + 雪盖屋顶 + 发光暖窗 + 烟囱 + 门，门口堆点雪
+    // 雪原小木屋：可进入（木墙留门洞 + 雪盖屋顶 + 暖窗 + 烟囱 + 屋里壁炉），进屋墙体变透明
     _buildSnowCabin(x, z) {
         const group = new THREE.Group();
-        const W = 3.4, H = 2.2, D = 2.8;
-        // 木墙
-        const walls = new THREE.Mesh(
-            new THREE.BoxGeometry(W, H, D),
-            new THREE.MeshToonMaterial({ color: 0x8a5a3a })
-        );
-        walls.position.y = H / 2;
-        walls.castShadow = true;
-        addOutline(walls, 0.03);
-        group.add(walls);
-        // 横木纹（几条深色细条）
-        for (let i = 1; i <= 3; i++) {
-            const line = new THREE.Mesh(
-                new THREE.BoxGeometry(W + 0.02, 0.06, D + 0.02),
-                new THREE.MeshToonMaterial({ color: 0x6a4326 })
-            );
-            line.position.y = (H / 4) * i;
-            group.add(line);
+        const W = 4.4, H = 3.0, D = 4.2, wallT = 0.22;
+        const doorW = 1.5, doorH = 2.1;
+        const fadeables = [];
+        const wallMat = () => new THREE.MeshToonMaterial({ color: 0x8a5a3a });
+        const frameMat = new THREE.MeshToonMaterial({ color: 0x5a3a22 });
+
+        // 室内地板（深木）
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshToonMaterial({ color: 0xb98a5a }));
+        floor.rotation.x = -Math.PI / 2; floor.position.y = 0.06; floor.receiveShadow = true;
+        group.add(floor);
+
+        // 后/左/右墙
+        const back = new THREE.Mesh(new THREE.BoxGeometry(W, H, wallT), wallMat());
+        back.position.set(0, H / 2, -D / 2); back.castShadow = true; addOutline(back, 0.025);
+        group.add(back); fadeables.push(back);
+        for (const sx of [-1, 1]) {
+            const side = new THREE.Mesh(new THREE.BoxGeometry(wallT, H, D), wallMat());
+            side.position.set(sx * W / 2, H / 2, 0); side.castShadow = true; addOutline(side, 0.025);
+            group.add(side); fadeables.push(side);
         }
-        // 雪盖屋顶（四坡锥，白雪）
-        const roof = new THREE.Mesh(
-            new THREE.ConeGeometry(W * 0.85, 1.7, 4),
-            new THREE.MeshToonMaterial({ color: 0xf6f9ff })
-        );
-        roof.position.y = H + 0.85;
-        roof.rotation.y = Math.PI / 4;
-        roof.castShadow = true;
+        // 前墙：留门洞（左段 + 右段 + 门楣）
+        const frontSideW = (W - doorW) / 2;
+        for (const sx of [-1, 1]) {
+            const fp = new THREE.Mesh(new THREE.BoxGeometry(frontSideW, H, wallT), wallMat());
+            fp.position.set(sx * (W / 2 - frontSideW / 2), H / 2, D / 2); fp.castShadow = true;
+            addOutline(fp, 0.025);
+            group.add(fp); fadeables.push(fp);
+        }
+        const frontTopH = H - doorH;
+        const frontT = new THREE.Mesh(new THREE.BoxGeometry(doorW, frontTopH, wallT), wallMat());
+        frontT.position.set(0, doorH + frontTopH / 2, D / 2);
+        addOutline(frontT, 0.025);
+        group.add(frontT); fadeables.push(frontT);
+        // 门框
+        for (const sx of [-1, 1]) {
+            const fr = new THREE.Mesh(new THREE.BoxGeometry(0.1, doorH, wallT + 0.06), frameMat);
+            fr.position.set(sx * doorW / 2, doorH / 2, D / 2);
+            group.add(fr);
+        }
+
+        // 雪盖屋顶（四坡锥）+ 雪檐
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(W * 0.8, 1.9, 4), new THREE.MeshToonMaterial({ color: 0xf6f9ff }));
+        roof.position.y = H + 0.95; roof.rotation.y = Math.PI / 4; roof.castShadow = true;
         addOutline(roof, 0.04);
-        group.add(roof);
-        // 门（深色，朝 +Z）
-        const door = new THREE.Mesh(
-            new THREE.BoxGeometry(0.9, 1.4, 0.1),
-            new THREE.MeshToonMaterial({ color: 0x5a3a22 })
-        );
-        door.position.set(0, 0.7, D / 2 + 0.02);
-        addOutline(door, 0.03);
-        group.add(door);
-        // 发光暖窗（一眼看出"有人住、暖和"）
+        group.add(roof); fadeables.push(roof);
+
+        // 发光暖窗（侧墙）
         const win = new THREE.Mesh(
-            new THREE.BoxGeometry(0.7, 0.7, 0.1),
-            new THREE.MeshToonMaterial({ color: 0xffe08a, emissive: 0xffc04a, emissiveIntensity: 1.1 })
+            new THREE.BoxGeometry(0.12, 0.8, 0.8),
+            new STD_MAT({ color: 0xffe08a, emissive: 0xffc04a, emissiveIntensity: 1.0 })
         );
-        win.position.set(-W / 2 - 0.01, 1.2, 0.2);
-        win.rotation.y = Math.PI / 2;
-        group.add(win);
-        const winLight = new THREE.PointLight(0xffd27a, 0.6, 6);
-        winLight.position.set(-W / 2 - 0.5, 1.2, 0.2);
-        group.add(winLight);
-        // 烟囱 + 一缕静态雪烟
-        const chimney = new THREE.Mesh(
-            new THREE.BoxGeometry(0.4, 0.7, 0.4),
-            new THREE.MeshToonMaterial({ color: 0x6a4326 })
-        );
-        chimney.position.set(W * 0.3, H + 1.0, -D * 0.2);
-        group.add(chimney);
+        win.position.set(-W / 2, H * 0.5, 0);
+        group.add(win); fadeables.push(win);
+
+        // 烟囱 + 静态雪烟
+        const chimney = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.8, 0.42), new THREE.MeshToonMaterial({ color: 0x6a4326 }));
+        chimney.position.set(W * 0.28, H + 1.2, -D * 0.2);
+        group.add(chimney); fadeables.push(chimney);
         for (let i = 0; i < 3; i++) {
             const puff = new THREE.Mesh(
                 new THREE.SphereGeometry(0.18 + i * 0.05, 8, 6),
                 new THREE.MeshToonMaterial({ color: 0xeef2f6, transparent: true, opacity: 0.5 - i * 0.12 })
             );
-            puff.position.set(W * 0.3 + i * 0.1, H + 1.5 + i * 0.4, -D * 0.2);
-            group.add(puff);
+            puff.position.set(W * 0.28 + i * 0.1, H + 1.7 + i * 0.4, -D * 0.2);
+            group.add(puff); fadeables.push(puff);
         }
-        // 门口堆雪
+
+        // 屋里壁炉（石座 + 跳动暖火）+ 地毯，暖融融
+        const hearth = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.9, 0.5), new THREE.MeshToonMaterial({ color: 0x9aa0a6 }));
+        hearth.position.set(0, 0.45, -D / 2 + 0.4);
+        addOutline(hearth, 0.03);
+        group.add(hearth);
+        const fire = new THREE.Mesh(
+            new THREE.SphereGeometry(0.26, 10, 8),
+            new STD_MAT({ color: 0xffa53a, emissive: 0xff7a1a, emissiveIntensity: 2.4 })
+        );
+        fire.scale.y = 1.4;
+        fire.position.set(0, 0.5, -D / 2 + 0.45);
+        group.add(fire);
+        const rug = new THREE.Mesh(new THREE.CircleGeometry(0.9, 20), new THREE.MeshToonMaterial({ color: 0xc04848 }));
+        rug.rotation.x = -Math.PI / 2; rug.position.set(0, 0.08, 0.2);
+        group.add(rug);
+
+        // 室内暖灯（夜里进屋自动点亮）
+        const lamp = new THREE.PointLight(0xffd27a, 0, 14, 1.1);
+        lamp.position.set(0, H - 0.8, 0);
+        group.add(lamp);
+
+        // 门口两侧堆雪
         const snowMat = new THREE.MeshToonMaterial({ color: 0xf6f9ff });
         for (const sx of [-1, 1]) {
             const pile = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 8), snowMat);
-            pile.scale.set(1.1, 0.4, 1.1);
-            pile.position.set(sx * W * 0.45, 0.1, D * 0.5);
+            pile.scale.set(1.0, 0.4, 1.0);
+            pile.position.set(sx * (W / 2 + 0.2), 0.1, D / 2 + 0.6);
             group.add(pile);
         }
 
-        group.position.set(x, 0, z);
-        group.rotation.y = 0.25;
+        group.position.set(x, 0, z);   // 不旋转：墙体 AABB 是轴对齐的
         this.scene.add(group);
-        // 墙体碰撞（绕着走）
-        this.obstacles.push({
-            min: new THREE.Vector3(x - W / 2, 0, z - D / 2),
-            max: new THREE.Vector3(x + W / 2, H, z + D / 2),
+
+        // 碰撞：6 段薄墙（门洞留空让人走进去）
+        const t = wallT / 2;
+        [
+            { min: new THREE.Vector3(x - W/2, 0, z - D/2 - t), max: new THREE.Vector3(x + W/2, H, z - D/2 + t) },
+            { min: new THREE.Vector3(x - W/2 - t, 0, z - D/2), max: new THREE.Vector3(x - W/2 + t, H, z + D/2) },
+            { min: new THREE.Vector3(x + W/2 - t, 0, z - D/2), max: new THREE.Vector3(x + W/2 + t, H, z + D/2) },
+            { min: new THREE.Vector3(x - W/2, 0, z + D/2 - t), max: new THREE.Vector3(x - W/2 + frontSideW, H, z + D/2 + t) },
+            { min: new THREE.Vector3(x + W/2 - frontSideW, 0, z + D/2 - t), max: new THREE.Vector3(x + W/2, H, z + D/2 + t) },
+            { min: new THREE.Vector3(x - doorW/2, doorH, z + D/2 - t), max: new THREE.Vector3(x + doorW/2, H, z + D/2 + t) },
+        ].forEach(w => this.obstacles.push(w));
+
+        // 登记为可进入的房子（进屋墙体透明 + 夜里开灯 + 室内视角）
+        this.houses.push({
+            min: new THREE.Vector3(x - W/2, 0, z - D/2),
+            max: new THREE.Vector3(x + W/2, H, z + D/2),
+            fadeables,
+            currentOpacity: 1,
+            lamp,
         });
     }
 
@@ -4063,43 +4166,42 @@ export class Game3D {
 
     _addPineTree(x, z) {
         const group = new THREE.Group();
-        const trunkH = 1.5 + Math.random() * 0.4;
+        const trunkH = 1.3 + Math.random() * 0.7;
         const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.18, 0.22, trunkH, 8),
-            new THREE.MeshToonMaterial({ color: 0x6a3a1a })
+            new THREE.CylinderGeometry(0.16, 0.24, trunkH, 8),
+            new THREE.MeshToonMaterial({ color: [0x6a3a1a, 0x5a3216, 0x7a4422][(Math.random() * 3) | 0] })
         );
         trunk.position.y = trunkH / 2;
         trunk.castShadow = true;
         addOutline(trunk, 0.05);
         group.add(trunk);
-        // 3 层圆锥（深绿+厚雪挂）
-        const greenMat = new THREE.MeshToonMaterial({ color: 0x2a6a3a });
+        // 3~4 层圆锥，松针深绿每棵略不同；雪量随机（有的厚雪、有的几乎没雪）
+        const pineGreens = [0x2a6a3a, 0x276040, 0x357a44, 0x1f5a34];
+        const greenMat = new THREE.MeshToonMaterial({ color: pineGreens[(Math.random() * pineGreens.length) | 0] });
         const snowMat = new THREE.MeshToonMaterial({ color: 0xf4f8ff });
-        const layers = 3;
+        const layers = 3 + ((Math.random() < 0.5) ? 1 : 0);
+        const snowAmt = Math.random();   // 0=几乎没雪 1=厚雪
+        const baseR = 0.5 + Math.random() * 0.2;
+        const h = 0.8 + Math.random() * 0.2;
         let y = trunkH;
         for (let i = layers - 1; i >= 0; i--) {
-            const r = 0.55 + i * 0.30;
-            const h = 0.85;
-            const cone = new THREE.Mesh(
-                new THREE.ConeGeometry(r, h, 10),
-                greenMat
-            );
+            const r = baseR + i * (0.26 + Math.random() * 0.08);
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(r, h, 10), greenMat);
             cone.position.y = y + h / 2;
+            cone.rotation.y = Math.random() * Math.PI;
             cone.castShadow = true;
             addOutline(cone, 0.04);
             group.add(cone);
-            // 雪挂：宽扁的雪锥压在每层上沿（像真的积了厚雪）
-            const snowCap = new THREE.Mesh(
-                new THREE.ConeGeometry(r * 0.88, h * 0.42, 10),
-                snowMat
-            );
-            snowCap.position.y = y + h * 0.72;
-            group.add(snowCap);
+            if (snowAmt > 0.25) {
+                const snowCap = new THREE.Mesh(new THREE.ConeGeometry(r * (0.7 + snowAmt * 0.2), h * 0.42, 10), snowMat);
+                snowCap.position.y = y + h * 0.72;
+                group.add(snowCap);
+            }
             y += h * 0.8;
         }
         group.position.set(x, 0, z);
         group.rotation.y = Math.random() * Math.PI * 2;
-        group.scale.setScalar(0.9 + Math.random() * 0.4);
+        group.scale.setScalar(0.8 + Math.random() * 0.6);
         this.scene.add(group);
         this._addPropCollider(x, z, 0.5, 2.6);
     }
@@ -8496,40 +8598,77 @@ export class Game3D {
 
     _addTree(x, z) {
         const group = new THREE.Group();
-        const trunkH = 1.4 + Math.random() * 1.0;
-        const trunkR = 0.18 + Math.random() * 0.08;
-        const trunk = new THREE.Mesh(
-            new THREE.CylinderGeometry(trunkR * 0.8, trunkR, trunkH, 8),
-            new THREE.MeshToonMaterial({ color: 0x8a5a2e })
-        );
+        // 4 种树型随机 + 每棵在树型内再大幅随机 → 不会两棵一样
+        const greens = [0x4f9a4a, 0x5aa84f, 0x6cb56c, 0x7cc25a, 0x4a8f55, 0x8fc96a, 0x3f8a48, 0x66ad5a];
+        const barkCols = [0x7a4a26, 0x8a5a2e, 0x6e4322, 0x946238];
+        const baseGreen = greens[(Math.random() * greens.length) | 0];
+        const bark = new THREE.MeshToonMaterial({ color: barkCols[(Math.random() * barkCols.length) | 0] });
+
+        const kind = Math.random();
+        let trunkH, blobs, crownR, spread, fruit = false, fruitColor = 0xff5a6a;
+        if (kind < 0.30) {            // 圆冠阔叶
+            trunkH = 1.5 + Math.random() * 0.8; blobs = 6; crownR = 0.85; spread = 0.55;
+        } else if (kind < 0.55) {     // 高瘦树
+            trunkH = 2.6 + Math.random() * 1.3; blobs = 4; crownR = 0.62; spread = 0.4;
+        } else if (kind < 0.80) {     // 矮胖灌木树
+            trunkH = 1.0 + Math.random() * 0.5; blobs = 7; crownR = 0.8; spread = 0.85;
+        } else {                      // 果树 / 花树
+            trunkH = 1.6 + Math.random() * 0.7; blobs = 5; crownR = 0.78; spread = 0.55;
+            fruit = true; fruitColor = [0xff5a6a, 0xff8fb8, 0xffd24a][(Math.random() * 3) | 0];
+        }
+        const trunkR = 0.14 + Math.random() * 0.07;
+
+        // 树干：略锥 + 轻微歪 + 偶尔一根枝桠
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(trunkR * 0.7, trunkR * 1.1, trunkH, 8), bark);
         trunk.position.y = trunkH / 2;
-        trunk.castShadow = true;
-        trunk.receiveShadow = true;
+        trunk.rotation.z = (Math.random() - 0.5) * 0.14;
+        trunk.castShadow = true; trunk.receiveShadow = true;
         addOutline(trunk, 0.05);
         group.add(trunk);
+        if (Math.random() < 0.5) {
+            const br = new THREE.Mesh(new THREE.CylinderGeometry(trunkR * 0.3, trunkR * 0.5, trunkH * 0.5, 6), bark);
+            const sx = Math.random() < 0.5 ? -1 : 1;
+            br.position.set(sx * trunkR * 1.4, trunkH * 0.66, 0);
+            br.rotation.z = sx * 0.7;
+            group.add(br);
+        }
 
-        const foliageColors = [0x6cb56c, 0x80c280, 0x589f58, 0x9ad086];
-        const fColor = foliageColors[Math.floor(Math.random() * foliageColors.length)];
-        const foliageMat = new THREE.MeshToonMaterial({ color: fColor });
-        const fCount = 2 + Math.floor(Math.random() * 2);
-        for (let i = 0; i < fCount; i++) {
-            const r = 0.65 + Math.random() * 0.35;
-            const ball = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), foliageMat);
-            ball.position.set(
-                (Math.random() - 0.5) * 0.45,
-                trunkH + r * 0.4 + i * r * 0.85,
-                (Math.random() - 0.5) * 0.45
-            );
-            ball.scale.y = 0.9 + Math.random() * 0.2;
+        // 不规则树冠：多团叠球，逐球颜色深浅/大小/位置都不同
+        const crownY = trunkH + crownR * 0.5;
+        const crownBalls = [];
+        for (let i = 0; i < blobs; i++) {
+            const a = (i / blobs) * Math.PI * 2 + Math.random() * 0.8;
+            const dist = i === 0 ? 0 : spread * (0.5 + Math.random() * 0.7);
+            const rad = (i === 0 ? crownR * 1.15 : crownR * (0.5 + Math.random() * 0.45));
+            const f = 0.82 + Math.random() * 0.34;           // 每球亮度微变
+            const col = f < 1 ? darkenHex(baseGreen, f) : lightenHex(baseGreen, (f - 1) * 0.5);
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(rad, 10, 8), new THREE.MeshToonMaterial({ color: col }));
+            ball.position.set(Math.cos(a) * dist, crownY + (i === 0 ? crownR * 0.5 : 0) + (Math.random() - 0.35) * crownR * 0.8, Math.sin(a) * dist);
+            ball.scale.y = 0.85 + Math.random() * 0.3;
             ball.castShadow = true;
-            addOutline(ball, 0.04);
+            addOutline(ball, 0.035);
             group.add(ball);
+            crownBalls.push(ball);
+        }
+        // 果树/花树：在树冠上点缀小果子/花
+        if (fruit) {
+            const fruitMat = new THREE.MeshToonMaterial({ color: fruitColor });
+            for (let i = 0; i < 7; i++) {
+                const host = crownBalls[(Math.random() * crownBalls.length) | 0];
+                const dot = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 5), fruitMat);
+                const a = Math.random() * Math.PI * 2, e = Math.random() * Math.PI;
+                const rr = host.geometry.parameters.radius * 0.95;
+                dot.position.set(host.position.x + Math.sin(e) * Math.cos(a) * rr, host.position.y + Math.cos(e) * rr, host.position.z + Math.sin(e) * Math.sin(a) * rr);
+                group.add(dot);
+            }
         }
 
         group.position.set(x, 0, z);
         group.rotation.y = Math.random() * Math.PI * 2;
+        const s = 0.85 + Math.random() * 0.55;
+        group.scale.setScalar(s);
         this.scene.add(group);
-        this._addPropCollider(x, z, 0.5, 2.6);
+        this._addPropCollider(x, z, 0.5 * s, 2.6 * s);
     }
 
     _initBirdFlock() {
@@ -8804,20 +8943,35 @@ export class Game3D {
 
     // 圆锥山峰（可选白雪顶）——清晰的"山"轮廓
     _addPeakMountain(cx, cz, size, bodyMat, capMat) {
-        const h = size * 1.5, rBase = size * 0.95;
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(rBase, h, 7), bodyMat);
+        const h = size * (1.35 + Math.random() * 0.4), rBase = size * 0.95;
         const yBase = -size * 0.15;                 // 山脚略陷进地里
-        cone.position.set(cx, yBase + h / 2, cz);
-        cone.rotation.y = Math.random() * Math.PI;
-        this.scene.add(cone);
+        const yaw = Math.random() * Math.PI;
+        // 主峰：非正圆（x/z 不等比）+ 随机朝向 → 轮廓不再是标准锥
+        const main = new THREE.Mesh(new THREE.ConeGeometry(rBase, h, 8), bodyMat);
+        main.position.set(cx, yBase + h / 2, cz);
+        main.rotation.y = yaw;
+        main.scale.set(1, 1, 0.72 + Math.random() * 0.4);
+        this.scene.add(main);
+        // 副峰：偏一侧、矮一截，让山脊起伏不规则
+        const h2 = h * (0.5 + Math.random() * 0.28), r2 = rBase * (0.5 + Math.random() * 0.18);
+        const oa = Math.random() * Math.PI * 2, off = rBase * (0.55 + Math.random() * 0.3);
+        const sub = new THREE.Mesh(new THREE.ConeGeometry(r2, h2, 7), bodyMat);
+        const sx = cx + Math.cos(oa) * off, sz = cz + Math.sin(oa) * off;
+        sub.position.set(sx, yBase + h2 / 2, sz);
+        sub.rotation.y = Math.random() * Math.PI;
+        this.scene.add(sub);
         if (capMat) {
-            const capH = h * 0.42;
-            const cap = new THREE.Mesh(new THREE.ConeGeometry(rBase * 0.5, capH, 7), capMat);
+            const capH = h * 0.4;
+            const cap = new THREE.Mesh(new THREE.ConeGeometry(rBase * 0.52, capH, 8), capMat);
             cap.position.set(cx, yBase + h - capH / 2, cz);
-            cap.rotation.y = cone.rotation.y;
+            cap.rotation.y = yaw;
+            cap.scale.set(1, 1, main.scale.z);
             this.scene.add(cap);
+            const cap2 = new THREE.Mesh(new THREE.ConeGeometry(r2 * 0.5, h2 * 0.36, 7), capMat);
+            cap2.position.set(sx, yBase + h2 - h2 * 0.18, sz);
+            this.scene.add(cap2);
         }
-        const r = rBase * 0.92;   // 贴合山体底盘，蛋停在山脚而不是陷进去（旧 0.7 会走进裙边约 30%）
+        const r = rBase * 0.92;   // 碰撞贴合主峰底盘
         this.obstacles.push({
             min: new THREE.Vector3(cx - r, 0, cz - r),
             max: new THREE.Vector3(cx + r, h * 0.8, cz + r),
