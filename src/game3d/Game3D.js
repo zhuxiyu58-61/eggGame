@@ -891,6 +891,7 @@ export class Game3D {
         this._buildBenches();
         this._buildLampposts();
         this._addVillageLife();
+        this._addMarketStalls();
         this._buildCollectibleStars();
         this._scatterMushrooms();
         this._buildHotAirBalloon();
@@ -8981,7 +8982,7 @@ export class Game3D {
         crate(9, 0.4, -9, 0.8); crate(9.7, 0.35, -8.4, 0.7); crate(9.1, 1.1, -9, 0.6);
         this._addPropCollider(9.3, -8.8, 1.0, 1.6);
 
-        // —— 路牌 (6, 6) 指向四个区 ——
+        // —— 路牌 (-5, 12) 南面入口，指向四个区（远离钟楼避免打架） ——
         {
             const g = new THREE.Group();
             const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 2.0, 7), woodDark);
@@ -8997,8 +8998,8 @@ export class Game3D {
                 board.position.set(0.4, d.y, 0); board.castShadow = true; addOutline(board, 0.02);
                 const arm = new THREE.Group(); arm.rotation.y = d.ry; arm.add(board); g.add(arm);
             }
-            g.position.set(6, 0, 6); this.scene.add(g);
-            this._addPropCollider(6, 6, 0.4, 2.0);
+            g.position.set(-5, 0, 12); this.scene.add(g);
+            this._addPropCollider(-5, 12, 0.4, 2.0);
         }
 
         // —— 小菜园 (-9, -9)：土畦 + 几行小菜 + 红萝卜叶 ——
@@ -9063,6 +9064,69 @@ export class Game3D {
             this._addPropCollider(-13, z0, 0.3, 2.2);
             this._addPropCollider(-13, z1, 0.3, 2.2);
         }
+    }
+
+    // 南面草地两个集市小摊：木台 + 条纹遮阳棚 + 台面货物
+    _addMarketStalls() {
+        const wood = new THREE.MeshToonMaterial({ color: 0x8a5a32 });
+        const woodDark = new THREE.MeshToonMaterial({ color: 0x5e3c1f });
+
+        const buildStall = (x, z, ry, stripeA, stripeB, goods) => {
+            const g = new THREE.Group();
+            // 台面
+            const counter = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.16, 0.95), wood);
+            counter.position.y = 0.92; counter.castShadow = true; addOutline(counter, 0.03); g.add(counter);
+            // 台前挡板
+            const front = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.84, 0.08), woodDark);
+            front.position.set(0, 0.5, 0.46); g.add(front);
+            // 四根立柱
+            for (const px of [-0.92, 0.92]) for (const pz of [-0.42, 0.42]) {
+                const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.1, 6), woodDark);
+                post.position.set(px, 1.05, pz); g.add(post);
+            }
+            // 条纹遮阳棚（两片斜面，交替色竖条）
+            const awn = new THREE.Group();
+            const nStripe = 8, w = 2.3;
+            for (let i = 0; i < nStripe; i++) {
+                const stripe = new THREE.Mesh(
+                    new THREE.BoxGeometry(w / nStripe, 0.05, 1.5),
+                    new THREE.MeshToonMaterial({ color: i % 2 ? stripeA : stripeB })
+                );
+                stripe.position.set(-w / 2 + (i + 0.5) * (w / nStripe), 0, 0);
+                awn.add(stripe);
+            }
+            awn.position.y = 2.25; awn.rotation.x = -0.32; addOutline(awn, 0.02); g.add(awn);
+            // 棚檐前缘的波浪小垂边
+            for (let i = 0; i < nStripe; i++) {
+                const flap = new THREE.Mesh(new THREE.BoxGeometry(w / nStripe, 0.18, 0.04),
+                    new THREE.MeshToonMaterial({ color: i % 2 ? stripeB : stripeA }));
+                flap.position.set(-w / 2 + (i + 0.5) * (w / nStripe), 2.0, 0.72); g.add(flap);
+            }
+            // 台面货物
+            goods.forEach(gd => {
+                // 篮子
+                const basket = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.2, 0.22, 10), new THREE.MeshToonMaterial({ color: 0x9a6a3a }));
+                basket.position.set(gd.x, 1.11, 0); addOutline(basket, 0.02); g.add(basket);
+                // 一堆小果子
+                for (let k = 0; k < 5; k++) {
+                    const a = k * 1.3;
+                    const fruit = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshToonMaterial({ color: gd.c }));
+                    fruit.position.set(gd.x + Math.cos(a) * 0.1, 1.26 + (k % 2) * 0.06, Math.sin(a) * 0.08);
+                    g.add(fruit);
+                }
+            });
+            g.position.set(x, 0, z); g.rotation.y = ry; this.scene.add(g);
+            this._addPropCollider(x, z, 1.1, 2.4);
+        };
+
+        // 果蔬摊（红绿条纹，苹果/橙/葡萄），朝向广场(-z)
+        buildStall(8, 14, Math.PI, 0xd84b4b, 0xf3efe2, [
+            { x: -0.6, c: 0xe23c2e }, { x: 0.0, c: 0xf08a2b }, { x: 0.6, c: 0x8c5bd0 },
+        ]);
+        // 面包/花摊（黄白条纹），朝向广场
+        buildStall(-8, 14, Math.PI, 0xe8a93a, 0xf3efe2, [
+            { x: -0.6, c: 0xd9a05a }, { x: 0.0, c: 0xc8823f }, { x: 0.6, c: 0xff7aa8 },
+        ]);
     }
 
     _updateLaundry(t) {
