@@ -894,6 +894,7 @@ export class Game3D {
         this._addMarketStalls();
         this._addBunting();
         this._addPlazaFlowers();
+        this._buildCampfires();
         this._buildCollectibleStars();
         this._scatterMushrooms();
         this._buildHotAirBalloon();
@@ -3916,12 +3917,36 @@ export class Game3D {
         if (region === 'desert') heatTarget = Math.max(0.25, Math.min(1, (p.z - 80) / 105));
         if (region === 'lake')   coolTarget = 0.6;
         if (region === 'forest') coolTarget = 0.42;
+
+        // —— 篝火取暖：靠近已点燃篝火 → 压制寒冷 + 暖意 + 慢回血 ——
+        const fire = this._nearestCampfire();
+        this._warmth = approach(this._warmth || 0, (fire && fire.dist < 5.5) ? (1 - fire.dist / 5.5) : 0, dt * 2.5);
+        if (this._warmth > 0.05) {
+            coldTarget *= (1 - this._warmth);          // 火边不哆嗦
+            heatTarget = Math.max(heatTarget, 0);      // 火不致中暑
+            this._warmHealT = (this._warmHealT || 0) + dt;
+            if (this._warmth > 0.45 && this._warmHealT > 3.5 && this.playerHP < this.playerHPMax) {
+                this._warmHealT = 0;
+                this.playerHP = Math.min(this.playerHPMax, this.playerHP + 1);
+                this._renderPlayerHP(); this._hpBarFlash = 0.4;
+                this._showEasterBadge('🔥 烤火回血 +1');
+            }
+        } else {
+            this._warmHealT = 0;
+        }
+
         this._coldT = approach(this._coldT, coldTarget, dt * 1.5);
         this._heatT = approach(this._heatT, heatTarget, dt * 1.5);
         this._coolT = approach(this._coolT, coolTarget, dt * 1.5);
 
         // —— 画面色调晕影 ——
-        if (this._coldT > 0.02) {
+        if (this._warmth > 0.06 && this._warmth >= this._coldT) {
+            // 篝火暖橙：温柔脉动
+            const wob = 0.9 + Math.sin(performance.now() * 0.005) * 0.1;
+            this._tintEl.style.background =
+                `radial-gradient(ellipse at center, transparent 36%, rgba(255,140,55,0.34) 100%)`;
+            this._tintEl.style.opacity = String(Math.min(0.65, this._warmth * 0.65 * wob));
+        } else if (this._coldT > 0.02) {
             this._tintEl.style.background =
                 `radial-gradient(ellipse at center, transparent 30%, rgba(90,150,230,0.55) 100%)`;
             this._tintEl.style.opacity = String(this._coldT);
@@ -9211,6 +9236,151 @@ export class Game3D {
         this.scene.add(ring);
     }
 
+    // ========= 篝火：取暖 + 烤鱼做饭 =========
+    _buildCampfires() {
+        this.campfires = [];
+        // 广场南侧(好发现) + 雪原入口(取暖刚需) + 南面去沙漠路上
+        [{ x: 16, z: 18 }, { x: -6, z: -50 }, { x: 10, z: 60 }].forEach(s => this._addCampfire(s.x, s.z));
+    }
+
+    _addCampfire(x, z) {
+        const g = new THREE.Group();
+        // 石圈
+        const stoneMat = new THREE.MeshToonMaterial({ color: 0x9a948a });
+        for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2 + Math.random() * 0.09), stoneMat);
+            s.position.set(Math.cos(a) * 0.85, 0.1, Math.sin(a) * 0.85);
+            s.rotation.set(Math.random(), Math.random(), Math.random());
+            addOutline(s, 0.02); g.add(s);
+        }
+        // 交叉柴堆
+        const logMat = new THREE.MeshToonMaterial({ color: 0x6e4423 });
+        for (let i = 0; i < 4; i++) {
+            const log = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 1.3, 6), logMat);
+            log.position.y = 0.18; log.rotation.z = Math.PI / 2 - 0.25; log.rotation.y = (i / 4) * Math.PI;
+            addOutline(log, 0.02); g.add(log);
+        }
+        // 火焰（几片亮锥，flicker）
+        const flames = [];
+        const flameCols = [0xff5a1e, 0xff8c2a, 0xffd23a];
+        for (let i = 0; i < 5; i++) {
+            const fh = 0.5 + Math.random() * 0.5;
+            const flame = new THREE.Mesh(
+                new THREE.ConeGeometry(0.16 + Math.random() * 0.12, fh, 6),
+                new THREE.MeshBasicMaterial({ color: flameCols[i % flameCols.length], transparent: true, opacity: 0.92, depthWrite: false, fog: false })
+            );
+            flame.position.set((Math.random() - 0.5) * 0.2, 0.35 + fh / 2, (Math.random() - 0.5) * 0.2);
+            flame.userData = { baseY: 0.35 + fh / 2, phase: Math.random() * 6.28, sx: 0.7 + Math.random() * 0.5 };
+            g.add(flame); flames.push(flame);
+        }
+        // 余烬贴地光
+        const ember = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12), new THREE.MeshBasicMaterial({ color: 0xff6a1a, transparent: true, opacity: 0.5, depthWrite: false }));
+        ember.rotation.x = -Math.PI / 2; ember.position.y = 0.06; g.add(ember);
+        // 暖光
+        const light = new THREE.PointLight(0xff7a2a, 1.6, 12, 2);
+        light.position.set(0, 1.0, 0); g.add(light);
+
+        g.position.set(x, 0, z);
+        this.scene.add(g);
+        this._addPropCollider(x, z, 0.7, 1.0);
+        this.campfires.push({ group: g, x, z, flames, light, ember, smokeT: Math.random(), lit: true });
+    }
+
+    _updateCampfires(dt) {
+        if (!this.campfires) return;
+        const t = performance.now() * 0.001;
+        for (const cf of this.campfires) {
+            if (!cf.lit) continue;
+            for (const fl of cf.flames) {
+                const u = fl.userData;
+                const fk = 0.7 + Math.abs(Math.sin(t * 8 + u.phase)) * 0.6 + Math.sin(t * 17 + u.phase) * 0.12;
+                fl.scale.set(u.sx, fk, u.sx);
+                fl.position.y = u.baseY * (0.8 + fk * 0.2);
+                fl.rotation.y = t * 2 + u.phase;
+            }
+            cf.light.intensity = 1.4 + Math.sin(t * 11 + cf.x) * 0.3 + Math.random() * 0.15;
+            cf.ember.material.opacity = 0.4 + Math.abs(Math.sin(t * 5 + cf.z)) * 0.25;
+            cf.smokeT -= dt;
+            if (cf.smokeT <= 0) { cf.smokeT = 0.5 + Math.random() * 0.3; this._spawnCampfireSmoke(cf.x, cf.z); }
+        }
+    }
+
+    _spawnCampfireSmoke(x, z) {
+        if (!this.smokeParticles) return;
+        const puff = new THREE.Mesh(
+            new THREE.SphereGeometry(0.16, 8, 6),
+            new THREE.MeshBasicMaterial({ color: 0xb8b0a8, transparent: true, opacity: 0.5, depthWrite: false, fog: true })
+        );
+        puff.position.set(x + (Math.random() - 0.5) * 0.2, 1.1, z + (Math.random() - 0.5) * 0.2);
+        const windVx = this.wind ? Math.cos(this.wind.dir) * this.wind.strength * 1.5 : 0;
+        const windVz = this.wind ? Math.sin(this.wind.dir) * this.wind.strength * 1.5 : 0;
+        puff.userData = { vx: (Math.random() - 0.5) * 0.2 + windVx, vz: (Math.random() - 0.5) * 0.12 + windVz, vy: 0.5 + Math.random() * 0.25, life: 3, full: 3, baseScale: 1 + Math.random() * 0.3 };
+        this.scene.add(puff);
+        this.smokeParticles.push(puff);
+    }
+
+    _nearestCampfire() {
+        if (!this.campfires) return null;
+        const p = this.player.position;
+        let best = null, bd = Infinity;
+        for (const cf of this.campfires) {
+            if (!cf.lit) continue;
+            const d = Math.hypot(p.x - cf.x, p.z - cf.z);
+            if (d < bd) { bd = d; best = cf; }
+        }
+        return best ? { cf: best, dist: bd } : null;
+    }
+
+    _removeFromInventory(emoji) {
+        if (!this.inventory) return false;
+        const i = this.inventory.indexOf(emoji);
+        if (i < 0) return false;
+        this.inventory.splice(i, 1);
+        this._saveInventory(); this._renderInventory();
+        return true;
+    }
+
+    // 按 G：篝火旁有生鱼→烤；有烤串→吃(回血/取暖)；否则提示
+    _doCampfire() {
+        const near = this._nearestCampfire();
+        if (!near || near.dist > 2.8) { this._showEasterBadge('🔥 走到篝火旁才能烤东西哦'); return; }
+        const RAW = ['🐟', '🐠', '🦐', '🐡'];
+        const inv = this.inventory || [];
+        const hasCooked = inv.includes('🍢');
+        const raw = inv.find(e => RAW.includes(e));
+        const hurt = this.playerHP < this.playerHPMax;
+
+        // 吃：受伤且有烤串 → 优先吃回血（火边最有用的事）；或没有生鱼可烤时也吃
+        if (hasCooked && (hurt || !raw)) {
+            this._removeFromInventory('🍢');
+            let msg;
+            if (hurt) {
+                this.playerHP = Math.min(this.playerHPMax, this.playerHP + 2);
+                this._renderPlayerHP(); this._hpBarFlash = 0.4;
+                msg = '😋 吃了烤鱼，暖暖的 +2 血！';
+            } else if (this.playerLives < this.playerLivesMax) {
+                this.playerLives++; this._renderHearts();
+                msg = '😋 吃饱啦，多一颗爱心！';
+            } else {
+                msg = '😋 吃了烤鱼，饱饱的～';
+            }
+            this._warmth = Math.max(this._warmth || 0, 0.8);
+            this._showEasterBadge(msg);
+            this._tone(660, 0.12, 'sine', 0.07); this._tone(880, 0.16, 'sine', 0.06, 0.08);
+            return;
+        }
+        // 烤：有生鱼 → 烤成串
+        if (raw) {
+            this._removeFromInventory(raw);
+            this._addToInventory('🍢');
+            this._showEasterBadge('🔥 滋啦～烤好一串鱼！受伤时按 G 吃掉回血');
+            this._tone(200, 0.3, 'sawtooth', 0.05); this._tone(160, 0.4, 'sawtooth', 0.04, 0.12);
+            return;
+        }
+        this._showEasterBadge('🎣 先钓条鱼(按 F)再来烤吧～');
+    }
+
     // 三条路入口横挂三角彩旗串（catenary 下垂 + 随风轻摆）
     _addBunting() {
         this._bunting = [];
@@ -10056,6 +10226,8 @@ export class Game3D {
                 else this._doWatering();
             }
             if (e.code === 'KeyF') { e.preventDefault(); this._toggleFishing(); }
+            if (e.code === 'KeyG') { e.preventDefault(); this._doCampfire(); }
+            if (e.code === 'KeyH') { e.preventDefault(); this._toggleHint?.(); }
             if (e.code === 'KeyM') { e.preventDefault(); this._toggleBGM(); }
             if (e.code === 'KeyJ') { e.preventDefault(); this._doMeleeAttack(); }
             if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
@@ -10185,7 +10357,30 @@ export class Game3D {
         this.hintEl = document.getElementById('game-hint');
         if (this.hintEl) {
             this.hintEl.style.display = 'block';
-            this.hintEl.textContent = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · M 音乐 · C 换造型 · ESC 释放';
+            this.hintEl.style.pointerEvents = 'auto';
+            this.hintEl.style.cursor = 'pointer';
+            this.hintEl.style.userSelect = 'none';
+            this.hintEl.title = '点一下 / 按 H 收起或展开';
+            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · M 音乐 · C 换造型 · ESC 释放';
+            const tog = document.createElement('span');
+            const txt = document.createElement('span');
+            txt.style.marginLeft = '8px';
+            this.hintEl.textContent = '';
+            this.hintEl.appendChild(tog);
+            this.hintEl.appendChild(txt);
+            let collapsed = false;
+            try { collapsed = localStorage.getItem('eggHintCollapsed') === '1'; } catch (e) {}
+            const apply = () => {
+                tog.textContent = collapsed ? '❔ 操作' : '操作帮助 ▴';
+                tog.style.opacity = '0.9';
+                txt.textContent = collapsed ? '' : full;
+                txt.style.display = collapsed ? 'none' : 'inline';
+                this.hintEl.style.padding = collapsed ? '6px 14px' : '8px 18px';
+                try { localStorage.setItem('eggHintCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+            };
+            apply();
+            this._toggleHint = () => { collapsed = !collapsed; apply(); };
+            this.hintEl.onclick = (ev) => { ev.stopPropagation(); this._toggleHint(); };
         }
     }
 
@@ -10244,6 +10439,7 @@ export class Game3D {
         this._updateChickens(dt);
         this._updateLaundry(performance.now() * 0.001);
         this._updateBunting(performance.now() * 0.001);
+        this._updateCampfires(dt);
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
