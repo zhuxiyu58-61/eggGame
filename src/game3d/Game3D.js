@@ -9313,15 +9313,9 @@ export class Game3D {
 
     _addDistantHills() {
         // 一圈远景地貌：北雪山 / 东西绿林山 / 南沙丘，形状颜色都对得上各区，不再是看不懂的球
-        const snowRock = new THREE.MeshToonMaterial({ color: 0x9fb0c8 });
-        const snowCap  = new THREE.MeshToonMaterial({ color: 0xf3f8ff });
-        const green    = new THREE.MeshToonMaterial({ color: 0x6aa85a });
-        const greenFar = new THREE.MeshToonMaterial({ color: 0x86c074 });
+        // 山体颜色现由 _addPeakMountain 顶点渐变控制；这里只留沙丘用的纯色材质
         const sand     = new THREE.MeshToonMaterial({ color: 0xe3c489 });
         const sandFar  = new THREE.MeshToonMaterial({ color: 0xeed3a3 });
-        // 深绿林山（西侧萤火森林背景）
-        const forestDark = new THREE.MeshToonMaterial({ color: 0x3f7a48 });
-        const forestMid  = new THREE.MeshToonMaterial({ color: 0x4f9156 });
         const COUNT = 34;
         for (let i = 0; i < COUNT; i++) {
             const angle = (i / COUNT) * Math.PI * 2;
@@ -9331,48 +9325,85 @@ export class Game3D {
             const cz = Math.sin(angle) * radius;
             const near = Math.random() > 0.5;
             if (cz < -120) {
-                this._addPeakMountain(cx, cz, size, snowRock, snowCap);   // ❄️ 雪山：岩锥 + 白雪顶
+                this._addPeakMountain(cx, cz, size, 0x8597b2, 0xb9c8dd, true);   // ❄️ 雪山：青灰岩 + 不规则雪线
             } else if (cz > 120) {
                 this._addSandDune(cx, cz, size, near ? sand : sandFar);   // 🏜️ 沙丘：低矮宽圆
             } else if (cx < -120) {
-                this._addPeakMountain(cx, cz, size, near ? forestDark : forestMid, null);  // 🌲 萤火森林深绿山
+                this._addPeakMountain(cx, cz, size, 0x36703f, near ? 0x4f9156 : 0x5ea065, false);  // 🌲 萤火森林深绿山
             } else {
-                this._addPeakMountain(cx, cz, size, near ? green : greenFar, null);  // 🌳 绿林山
+                this._addPeakMountain(cx, cz, size, near ? 0x5a9a4c : 0x69a85a, near ? 0x86c074 : 0x97cd82, false);  // 🌳 绿林山
             }
         }
     }
 
-    // 圆锥山峰（可选白雪顶）——清晰的"山"轮廓
-    _addPeakMountain(cx, cz, size, bodyMat, capMat) {
-        const h = size * (1.35 + Math.random() * 0.4), rBase = size * 0.95;
-        const yBase = -size * 0.15;                 // 山脚略陷进地里
-        const yaw = Math.random() * Math.PI;
-        // 主峰：非正圆（x/z 不等比）+ 随机朝向 → 轮廓不再是标准锥
-        const main = new THREE.Mesh(new THREE.ConeGeometry(rBase, h, 8), bodyMat);
-        main.position.set(cx, yBase + h / 2, cz);
-        main.rotation.y = yaw;
-        main.scale.set(1, 1, 0.72 + Math.random() * 0.4);
-        this.scene.add(main);
-        // 副峰：偏一侧、矮一截，让山脊起伏不规则
-        const h2 = h * (0.5 + Math.random() * 0.28), r2 = rBase * (0.5 + Math.random() * 0.18);
-        const oa = Math.random() * Math.PI * 2, off = rBase * (0.55 + Math.random() * 0.3);
-        const sub = new THREE.Mesh(new THREE.ConeGeometry(r2, h2, 7), bodyMat);
-        const sx = cx + Math.cos(oa) * off, sz = cz + Math.sin(oa) * off;
-        sub.position.set(sx, yBase + h2 / 2, sz);
-        sub.rotation.y = Math.random() * Math.PI;
-        this.scene.add(sub);
-        if (capMat) {
-            const capH = h * 0.4;
-            const cap = new THREE.Mesh(new THREE.ConeGeometry(rBase * 0.52, capH, 8), capMat);
-            cap.position.set(cx, yBase + h - capH / 2, cz);
-            cap.rotation.y = yaw;
-            cap.scale.set(1, 1, main.scale.z);
-            this.scene.add(cap);
-            const cap2 = new THREE.Mesh(new THREE.ConeGeometry(r2 * 0.5, h2 * 0.36, 7), capMat);
-            cap2.position.set(sx, yBase + h2 - h2 * 0.18, sz);
-            this.scene.add(cap2);
+    // 嶙峋山峰：圆锥顶点做多谐波山脊扰动 + 顶点渐变色（山脚深→顶浅，雪线随角度起伏）
+    // 不再是干净三角片；一座山主峰+1~2副峰，单 mesh 顶点上色，省描边/雪帽 mesh
+    _addPeakMountain(cx, cz, size, baseColor, topColor, snowCap) {
+        const h = size * (1.5 + Math.random() * 0.55);
+        const rBase = size * (0.82 + Math.random() * 0.22);
+        const yBase = -size * 0.18;                 // 山脚陷进地里，藏掉锥底硬边
+        const grp = new THREE.Group();
+        const white = new THREE.Color(0xf4f9ff);
+        const cBase = new THREE.Color(baseColor);
+        const cTop = new THREE.Color(topColor);
+        const tmp = new THREE.Color();
+
+        const buildPeak = (pr, ph) => {
+            const geo = new THREE.ConeGeometry(pr, ph, 18, 6);
+            const pos = geo.attributes.position;
+            const s1 = Math.random() * 6.28, s2 = Math.random() * 6.28, s3 = Math.random() * 6.28;
+            const snowLine = 0.42 + Math.random() * 0.1;
+            // 峰顶偏移方向（让山尖不居中，山体不对称）
+            const lean = Math.random() * 6.28, leanAmt = pr * (0.18 + Math.random() * 0.18);
+            const lx = Math.cos(lean) * leanAmt, lz = Math.sin(lean) * leanAmt;
+            const colors = [];
+            for (let i = 0; i < pos.count; i++) {
+                let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+                const hr = (y + ph / 2) / ph;          // 0 山脚 .. 1 山顶
+                const ang = Math.atan2(z, x);
+                // 多谐波山脊 + 单瓣肩脊：让一侧鼓出，轮廓嶙峋不对称
+                const ridge = 0.30 * Math.sin(3 * ang + s1) + 0.16 * Math.sin(7 * ang + s2)
+                    + 0.08 * Math.sin(15 * ang + s3) + 0.20 * Math.sin(ang + s1 * 0.5);
+                const radialF = 1 + ridge * (1 - hr * 0.5);
+                x *= radialF; z *= radialF;
+                // 越往上越向 lean 方向偏，峰顶歪一点
+                x += lx * hr * hr; z += lz * hr * hr;
+                pos.setX(i, x); pos.setZ(i, z);
+                if (hr < 0.32 && hr > 0.01) pos.setY(i, y + ridge * ph * 0.2);   // 山脚丘陵起伏
+                // 顶点色：base→top 渐变
+                tmp.copy(cBase).lerp(cTop, Math.min(1, hr * 1.15));
+                if (snowCap) {
+                    const sl = snowLine + 0.12 * Math.sin(2 * ang + s1);   // 雪线沿山体起伏（南坡少北坡多）
+                    if (hr > sl) tmp.lerp(white, Math.min(1, (hr - sl) / (1 - sl) * 2.2));
+                }
+                colors.push(tmp.r, tmp.g, tmp.b);
+            }
+            pos.needsUpdate = true;
+            geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geo.computeVertexNormals();
+            return new THREE.Mesh(geo, new THREE.MeshToonMaterial({ vertexColors: true }));
+        };
+
+        const main = buildPeak(rBase, h);
+        main.position.set(0, yBase + h / 2, 0);
+        main.scale.set(1, 1, 0.82 + Math.random() * 0.28);
+        main.rotation.y = Math.random() * Math.PI;
+        grp.add(main);
+        // 1~2 个错落副峰，组成山体而非孤锥
+        const subN = Math.random() < 0.6 ? 2 : 1;
+        for (let k = 0; k < subN; k++) {
+            const h2 = h * (0.42 + Math.random() * 0.3), r2 = rBase * (0.48 + Math.random() * 0.22);
+            const oa = Math.random() * Math.PI * 2, off = rBase * (0.62 + Math.random() * 0.4);
+            const sub = buildPeak(r2, h2);
+            sub.position.set(Math.cos(oa) * off, yBase + h2 / 2, Math.sin(oa) * off);
+            sub.scale.set(1, 1, 0.82 + Math.random() * 0.28);
+            sub.rotation.y = Math.random() * Math.PI;
+            grp.add(sub);
         }
-        const r = rBase * 0.92;   // 碰撞贴合主峰底盘
+
+        grp.position.set(cx, 0, cz);
+        this.scene.add(grp);
+        const r = rBase * 1.0;   // 碰撞贴合主峰底盘
         this.obstacles.push({
             min: new THREE.Vector3(cx - r, 0, cz - r),
             max: new THREE.Vector3(cx + r, h * 0.8, cz + r),
