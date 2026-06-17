@@ -892,6 +892,7 @@ export class Game3D {
         this._buildLampposts();
         this._addVillageLife();
         this._addMarketStalls();
+        this._addBunting();
         this._buildCollectibleStars();
         this._scatterMushrooms();
         this._buildHotAirBalloon();
@@ -9129,6 +9130,69 @@ export class Game3D {
         ]);
     }
 
+    // 三条路入口横挂三角彩旗串（catenary 下垂 + 随风轻摆）
+    _addBunting() {
+        this._bunting = [];
+        // 三角旗几何复用一份（顶边朝上、尖朝下）
+        const tri = new THREE.Shape();
+        tri.moveTo(-0.16, 0); tri.lineTo(0.16, 0); tri.lineTo(0, -0.34); tri.closePath();
+        const flagGeo = new THREE.ShapeGeometry(tri);
+        const ropeMat = new THREE.MeshToonMaterial({ color: 0x4a3a2a });
+        const flagCols = [0xff5f6d, 0xffc24b, 0x5fd0ff, 0x8ce06a, 0xc88cff, 0xff8fc4];
+
+        const strings = [
+            { a: [-4.7, -8], b: [4.7, -8] },   // 北路入口
+            { a: [8, -4.7], b: [8, 4.7] },     // 东路入口
+            { a: [-8, -4.7], b: [-8, 4.7] },   // 西路入口
+        ];
+        const Y = 3.3, SAG = 0.9, N = 9;
+        for (const s of strings) {
+            const g = new THREE.Group();
+            const pts = [];
+            for (let i = 0; i <= N; i++) {
+                const t = i / N;
+                const x = s.a[0] + (s.b[0] - s.a[0]) * t;
+                const z = s.a[1] + (s.b[1] - s.a[1]) * t;
+                const y = Y - Math.sin(t * Math.PI) * SAG;   // 下垂
+                pts.push(new THREE.Vector3(x, y, z));
+            }
+            // 两端立杆
+            for (const end of [s.a, s.b]) {
+                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, Y + 0.4, 6), new THREE.MeshToonMaterial({ color: 0x5e3c1f }));
+                pole.position.set(end[0], (Y + 0.4) / 2, end[1]); addOutline(pole, 0.03); g.add(pole);
+            }
+            // 绳段
+            for (let i = 0; i < pts.length - 1; i++) {
+                const p0 = pts[i], p1 = pts[i + 1];
+                const mid = p0.clone().add(p1).multiplyScalar(0.5);
+                const len = p0.distanceTo(p1);
+                const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, len, 4), ropeMat);
+                seg.position.copy(mid);
+                seg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), p1.clone().sub(p0).normalize());
+                g.add(seg);
+            }
+            // 每段中点挂一面旗
+            for (let i = 0; i < pts.length - 1; i++) {
+                const mid = pts[i].clone().add(pts[i + 1]).multiplyScalar(0.5);
+                const flag = new THREE.Mesh(flagGeo, new THREE.MeshToonMaterial({ color: flagCols[i % flagCols.length], side: THREE.DoubleSide }));
+                flag.position.copy(mid);
+                flag.position.y -= 0.02;
+                g.add(flag);
+                this._bunting.push({ flag, phase: (s.a[0] + s.a[1] + i) * 0.7, baseRotZ: 0 });
+            }
+            this.scene.add(g);
+        }
+    }
+
+    _updateBunting(t) {
+        if (!this._bunting) return;
+        for (const f of this._bunting) {
+            // 风吹翻飞：绕挂点小幅摆动
+            f.flag.rotation.z = Math.sin(t * 2.2 + f.phase) * 0.22;
+            f.flag.rotation.y = Math.sin(t * 1.7 + f.phase) * 0.3;
+        }
+    }
+
     _updateLaundry(t) {
         if (!this._laundry) return;
         for (const l of this._laundry) {
@@ -10037,6 +10101,7 @@ export class Game3D {
         this._updateBellTower(dt);
         this._updateChickens(dt);
         this._updateLaundry(performance.now() * 0.001);
+        this._updateBunting(performance.now() * 0.001);
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
