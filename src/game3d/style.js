@@ -1,33 +1,58 @@
-// 小蛋造型数据 + localStorage 存档（与渲染引擎解耦，3D 版直接复用）
+// 小女孩造型数据 + localStorage 存档（与渲染引擎解耦，3D / 预览共用）
+// 主角是个进入「蛋世界」的小女孩：可换 发色 / 发型 / 裙子颜色 / 肤色 / 头饰
 
 const STORAGE_KEY = 'eggGameStyle';
 
 export const DEFAULT_STYLE = {
-    bodyColor: '#ff69b4',
-    eyeColor: '#2c2c54',
-    accessory: 'none',
+    hairColor: '#6b4226',   // 棕
+    hairStyle: 'twin',      // 双马尾
+    dressColor: '#ff69b4',  // 粉
+    skin: '#ffe0c2',        // 白皙
+    headwear: 'none',
+    eyeColor: '#3a2a22',    // 深棕（不在界面里调，固定一个好看的）
 };
 
-export const BODY_COLOR_OPTIONS = [
+// 发色
+export const HAIR_COLOR_OPTIONS = [
+    { color: '#2b2b33', label: '黑' },
+    { color: '#6b4226', label: '棕' },
+    { color: '#e8c45a', label: '金' },
+    { color: '#9a3b2e', label: '栗红' },
+    { color: '#ff9ec4', label: '粉' },
+    { color: '#8fb6ff', label: '蓝' },
+];
+
+// 发型
+export const HAIR_STYLE_OPTIONS = [
+    { id: 'twin',   label: '双马尾' },
+    { id: 'bun',    label: '丸子头' },
+    { id: 'braids', label: '麻花辫' },
+    { id: 'short',  label: '短发' },
+];
+
+// 裙子 / 衣服颜色
+export const DRESS_COLOR_OPTIONS = [
     { color: '#ff69b4', label: '粉' },
-    { color: '#7bc4ff', label: '蓝' },
-    { color: '#ffe066', label: '黄' },
-    { color: '#7ed5a8', label: '绿' },
-    { color: '#c8a8ff', label: '紫' },
-    { color: '#ffa07a', label: '橙' },
+    { color: '#ff5a6a', label: '红' },
+    { color: '#5aa9ff', label: '蓝' },
+    { color: '#ffd24a', label: '黄' },
+    { color: '#6fd39a', label: '绿' },
+    { color: '#b98cff', label: '紫' },
 ];
 
-export const EYE_COLOR_OPTIONS = [
-    { color: '#2c2c54', label: '深紫' },
-    { color: '#5a3d1f', label: '棕色' },
-    { color: '#1565c0', label: '蓝色' },
+// 肤色
+export const SKIN_OPTIONS = [
+    { color: '#ffe6cf', label: '白皙' },
+    { color: '#f3c9a0', label: '自然' },
+    { color: '#d29a6a', label: '小麦' },
 ];
 
-export const ACCESSORY_OPTIONS = [
-    { id: 'none',  label: '无' },
-    { id: 'bow',   label: '蝴蝶结' },
-    { id: 'leaf',  label: '小芽' },
-    { id: 'crown', label: '皇冠' },
+// 头饰
+export const HEADWEAR_OPTIONS = [
+    { id: 'none',   label: '无' },
+    { id: 'bow',    label: '蝴蝶结' },
+    { id: 'flower', label: '小花' },
+    { id: 'crown',  label: '皇冠' },
 ];
 
 export function hexToInt(hex) {
@@ -37,7 +62,15 @@ export function hexToInt(hex) {
 export function loadStyle() {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) return { ...DEFAULT_STYLE, ...JSON.parse(raw) };
+        if (raw) {
+            const old = JSON.parse(raw);
+            // 旧蛋头存档迁移：bodyColor→dressColor，accessory→headwear（leaf→flower）
+            if (old.bodyColor && !old.dressColor) old.dressColor = old.bodyColor;
+            if (old.accessory && !old.headwear) {
+                old.headwear = old.accessory === 'leaf' ? 'flower' : old.accessory;
+            }
+            return { ...DEFAULT_STYLE, ...old };
+        }
     } catch (e) {}
     return { ...DEFAULT_STYLE };
 }

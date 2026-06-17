@@ -8896,86 +8896,102 @@ export class Game3D {
         this.player.add(this.animRoot);
 
         const r = PLAYER_RADIUS;
-        const bodyColor = hexToInt(this.style.bodyColor);
-        const eyeColor = hexToInt(this.style.eyeColor);
-        const skinMat = () => new THREE.MeshToonMaterial({ color: bodyColor });
-        const pantsHex = darkenHex(bodyColor, 0.62);
-        const pantsMat = () => new THREE.MeshToonMaterial({ color: pantsHex });
+        const skinHex = hexToInt(this.style.skin || '#ffe0c2');
+        const dressHex = hexToInt(this.style.dressColor || '#ff69b4');
+        const hairHex = hexToInt(this.style.hairColor || '#6b4226');
+        const eyeColor = hexToInt(this.style.eyeColor || '#3a2a22');
+        const skinMat = () => new THREE.MeshToonMaterial({ color: skinHex });
+        const dressMat = () => new THREE.MeshToonMaterial({ color: dressHex });
+        const dressDark = darkenHex(dressHex, 0.78);
+        const hairMat = () => new THREE.MeshToonMaterial({ color: hairHex });
+        const shoeHex = darkenHex(dressHex, 0.5);
 
-        // 蛋头小人：蛋当脑袋（身份主体），下面接小身体 + 小手小脚，走路像个小朋友
-        const headR = r * 0.72;
-        const headY = r * 1.62;                 // 蛋头中心高度
-        const headTop = headY + headR * 1.22;   // 蛋头顶（配饰锚点）
+        // 进入蛋世界的小女孩：头(肤)+头发+脸+连衣裙+小手小脚，走路像个小朋友
+        const headR = r * 0.54;
+        const headY = r * 1.74;                 // 头中心高度
+        const hairTop = headY + headR * 1.05;   // 头顶（头饰锚点）
 
-        // ===== 小身体（躯干，蛋色 + 前面一块浅色肚兜）=====
-        const torso = new THREE.Mesh(new THREE.SphereGeometry(r * 0.46, 18, 14), skinMat());
-        torso.scale.set(1.0, 1.05, 0.92);
-        torso.position.y = r * 0.92;
-        torso.castShadow = true;
-        addOutline(torso, 0.05);
-        this.animRoot.add(torso);
-        const belly = new THREE.Mesh(
-            new THREE.CircleGeometry(r * 0.26, 18),
-            new THREE.MeshToonMaterial({ color: lightenHex(bodyColor, 0.5) })
-        );
-        belly.position.set(0, r * 0.9, -r * 0.43);
-        belly.lookAt(0, r * 0.9, -r * 5);
-        this.animRoot.add(belly);
-
-        // ===== 两条小腿（带小脚，会迈步）=====
+        // ===== 两条小腿（带鞋，会迈步）=====
         this._legs = [];
         for (const sx of [-1, 1]) {
             const hip = new THREE.Group();
-            hip.position.set(sx * r * 0.2, r * 0.52, 0);
-            const leg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.13, r * 0.12, r * 0.5, 8), pantsMat());
+            hip.position.set(sx * r * 0.2, r * 0.5, 0);
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.11, r * 0.1, r * 0.5, 8), skinMat());
             leg.position.y = -r * 0.25;
             leg.castShadow = true;
             addOutline(leg, 0.05);
             hip.add(leg);
-            const foot = new THREE.Mesh(new THREE.SphereGeometry(r * 0.16, 10, 8), pantsMat());
-            foot.scale.set(1, 0.7, 1.4);
-            foot.position.set(0, -r * 0.5, -r * 0.08);
-            addOutline(foot, 0.05);
-            hip.add(foot);
+            const shoe = new THREE.Mesh(new THREE.SphereGeometry(r * 0.16, 10, 8), new THREE.MeshToonMaterial({ color: shoeHex }));
+            shoe.scale.set(1, 0.7, 1.4);
+            shoe.position.set(0, -r * 0.5, -r * 0.08);
+            addOutline(shoe, 0.05);
+            hip.add(shoe);
             this.animRoot.add(hip);
             this._legs.push({ hip, sx });
         }
 
-        // ===== 两条小手臂（蛋色，会前后摆）=====
+        // ===== 连衣裙（上身 + 张开的裙摆）=====
+        const bodice = new THREE.Mesh(new THREE.SphereGeometry(r * 0.4, 18, 14), dressMat());
+        bodice.scale.set(1, 1.0, 0.85);
+        bodice.position.y = r * 1.04;
+        bodice.castShadow = true;
+        addOutline(bodice, 0.05);
+        this.animRoot.add(bodice);
+        const skirt = new THREE.Mesh(new THREE.ConeGeometry(r * 0.6, r * 0.66, 18), dressMat());
+        skirt.position.y = r * 0.7;
+        skirt.castShadow = true;
+        addOutline(skirt, 0.05);
+        this.animRoot.add(skirt);
+        const hem = new THREE.Mesh(new THREE.TorusGeometry(r * 0.58, r * 0.05, 6, 20), new THREE.MeshToonMaterial({ color: dressDark }));
+        hem.rotation.x = Math.PI / 2;
+        hem.position.y = r * 0.4;
+        this.animRoot.add(hem);
+        // 受击闪红 + 雨天变深，都作用在裙子上
+        this.bodyMesh = skirt;
+        this._bodyColorDry = dressHex;
+        this._bodyColorWet = darkenHex(dressHex, 0.75);
+
+        // ===== 两条小手臂（带泡泡袖，会前后摆）=====
         this._arms = [];
         for (const sx of [-1, 1]) {
             const sh = new THREE.Group();
-            sh.position.set(sx * r * 0.5, r * 1.15, 0);
-            const arm = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.1, r * 0.09, r * 0.42, 8), skinMat());
-            arm.position.y = -r * 0.2;
+            sh.position.set(sx * r * 0.44, r * 1.22, 0);
+            const sleeve = new THREE.Mesh(new THREE.SphereGeometry(r * 0.16, 10, 8), dressMat());
+            sleeve.position.y = -r * 0.04;
+            addOutline(sleeve, 0.05);
+            sh.add(sleeve);
+            const arm = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.08, r * 0.07, r * 0.4, 8), skinMat());
+            arm.position.y = -r * 0.26;
             arm.castShadow = true;
             addOutline(arm, 0.05);
             sh.add(arm);
-            const hand = new THREE.Mesh(new THREE.SphereGeometry(r * 0.13, 10, 8), skinMat());
-            hand.position.y = -r * 0.42;
+            const hand = new THREE.Mesh(new THREE.SphereGeometry(r * 0.11, 10, 8), skinMat());
+            hand.position.y = -r * 0.46;
             addOutline(hand, 0.05);
             sh.add(hand);
             this.animRoot.add(sh);
             this._arms.push({ sh, sx });
         }
 
-        // ===== 蛋头（可换色 + 脸 + 配饰，整个角色的身份主体）=====
-        const headGeo = new THREE.SphereGeometry(headR, 32, 32);
-        headGeo.scale(1, 1.22, 1);
-        const body = new THREE.Mesh(headGeo, skinMat());
-        body.position.y = headY;
-        body.castShadow = true;
-        addOutline(body, 0.06);
-        this.animRoot.add(body);
-        this.bodyMesh = body;
-        this._bodyColorDry = bodyColor;
-        // 雨天用的湿身颜色（压暗 25%）
-        this._bodyColorWet = darkenHex(bodyColor, 0.75);
+        // ===== 脖子 + 头（肤色）=====
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.12, r * 0.14, r * 0.18, 10), skinMat());
+        neck.position.y = r * 1.4;
+        this.animRoot.add(neck);
+        const headGeo = new THREE.SphereGeometry(headR, 28, 24);
+        headGeo.scale(1, 1.06, 0.96);
+        const head = new THREE.Mesh(headGeo, skinMat());
+        head.position.y = headY;
+        head.castShadow = true;
+        addOutline(head, 0.05);
+        this.animRoot.add(head);
 
-        // 雨天的水珠（默认隐藏，挂在蛋头上）
+        // ===== 头发（后发 + 刘海 + 发型）=====
+        this._buildHair(this.style.hairStyle || 'twin', hairMat, dressHex, headY, headR, r);
+
+        // 雨天的水珠（默认隐藏，挂在头/发上）
         this.waterDrops = [];
         for (let i = 0; i < 6; i++) {
-            const dropR = headR * 0.06 + Math.random() * headR * 0.05;
+            const dropR = headR * 0.07 + Math.random() * headR * 0.05;
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(dropR, 8, 6),
                 new THREE.MeshToonMaterial({ color: 0xa8d8f0, transparent: true, opacity: 0.85 })
@@ -8983,29 +8999,30 @@ export class Game3D {
             const u = Math.random() * Math.PI * 2;
             const v = Math.PI * 0.2 + Math.random() * Math.PI * 0.5;
             drop.position.set(
-                Math.sin(v) * Math.cos(u) * headR * 0.95,
+                Math.sin(v) * Math.cos(u) * headR * 1.0,
                 headY + Math.cos(v) * headR * 1.1,
-                Math.sin(v) * Math.sin(u) * headR * 0.95
+                Math.sin(v) * Math.sin(u) * headR * 1.0
             );
             drop.visible = false;
             this.animRoot.add(drop);
             this.waterDrops.push(drop);
         }
 
-        // ===== 眼睛（蛋脸上半，正前方 = -z）=====
-        const eyeR = headR * 0.26;
+        // ===== 眼睛（脸上半，正前方 = -z）=====
+        const eyeR = headR * 0.28;
         const eyeWhiteMat = new THREE.MeshToonMaterial({ color: 0xffffff });
         const pupilMat = new THREE.MeshToonMaterial({ color: eyeColor });
         for (const sx of [-1, 1]) {
             const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 16), eyeWhiteMat);
-            eye.position.set(sx * headR * 0.36, headY + headR * 0.12, -headR * 0.82);
+            eye.scale.set(0.85, 1.1, 0.6);
+            eye.position.set(sx * headR * 0.38, headY + headR * 0.1, -headR * 0.82);
             this.animRoot.add(eye);
-            const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.55, 12, 12), pupilMat);
-            pupil.position.set(sx * headR * 0.36, headY + headR * 0.12, -headR * 0.96);
+            const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.62, 12, 12), pupilMat);
+            pupil.position.set(sx * headR * 0.38, headY + headR * 0.08, -headR * 0.96);
             this.animRoot.add(pupil);
-            // 高光小白点：主角眼睛有神、活泼，跟怪物的死眼区分开
-            const shine = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.22, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            shine.position.set(sx * headR * 0.36 - headR * 0.07, headY + headR * 0.2, -headR * 1.04);
+            // 高光小白点：眼睛有神、活泼
+            const shine = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.24, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            shine.position.set(sx * headR * 0.38 - headR * 0.08, headY + headR * 0.2, -headR * 1.04);
             this.animRoot.add(shine);
         }
 
@@ -9013,53 +9030,36 @@ export class Game3D {
         const cheekMat = new THREE.MeshBasicMaterial({ color: 0xff8fb8, transparent: true, opacity: 0.6 });
         for (const sx of [-1, 1]) {
             const cheek = new THREE.Mesh(new THREE.CircleGeometry(headR * 0.2, 14), cheekMat);
-            cheek.position.set(sx * headR * 0.56, headY - headR * 0.16, -headR * 0.66);
-            cheek.lookAt(sx * headR * 5, headY - headR * 0.16, -headR * 5);
+            cheek.position.set(sx * headR * 0.56, headY - headR * 0.18, -headR * 0.66);
+            cheek.lookAt(sx * headR * 5, headY - headR * 0.18, -headR * 5);
             this.animRoot.add(cheek);
         }
 
         // ===== 嘴（微笑半圆环）=====
-        const mouthGeo = new THREE.TorusGeometry(headR * 0.15, headR * 0.025, 6, 16, Math.PI);
-        const mouth = new THREE.Mesh(mouthGeo, new THREE.MeshBasicMaterial({ color: 0x2c2c54 }));
-        mouth.position.set(0, headY - headR * 0.3, -headR * 0.9);
+        const mouthGeo = new THREE.TorusGeometry(headR * 0.14, headR * 0.025, 6, 16, Math.PI);
+        const mouth = new THREE.Mesh(mouthGeo, new THREE.MeshBasicMaterial({ color: 0x7a4a3a }));
+        mouth.position.set(0, headY - headR * 0.34, -headR * 0.88);
         mouth.rotation.z = Math.PI; // 翻成 U 形 = 微笑
         this.animRoot.add(mouth);
 
-        // ===== 头顶装饰 =====
-        this._addAccessory(this.style.accessory, headTop, headR);
+        // ===== 头饰 =====
+        this._addAccessory(this.style.headwear, hairTop, headR);
 
-        // ===== 主角专属：小探险家行头（怪物都没有，一眼分清"我"是好人）=====
-        const scarfHex = 0x18b6c9;   // 青绿围巾：跟蛋身（多半暖色）形成强对比，远处也跳出来
-        const bagHex = 0x8a5a2e, bagDark = darkenHex(0x8a5a2e, 0.7);
-        // 围巾：脖子一圈 + 一条会飘的尾巴
-        const neckY = r * 1.18;
-        const collar = new THREE.Mesh(new THREE.TorusGeometry(r * 0.34, r * 0.1, 8, 18), new THREE.MeshToonMaterial({ color: scarfHex }));
-        collar.rotation.x = Math.PI / 2;
-        collar.position.y = neckY;
-        addOutline(collar, 0.05);
-        this.animRoot.add(collar);
-        const tailPivot = new THREE.Group();
-        tailPivot.position.set(r * 0.2, neckY, r * 0.18);   // 挂在右后侧
-        const tail = new THREE.Mesh(new THREE.BoxGeometry(r * 0.16, r * 0.55, r * 0.05), new THREE.MeshToonMaterial({ color: scarfHex }));
-        tail.position.y = -r * 0.26;
-        addOutline(tail, 0.05);
-        tailPivot.add(tail);
-        this.animRoot.add(tailPivot);
-        this._scarfTail = tailPivot;
-        // 斜挎探险包：一条斜跨胸前的背带 + 腰侧小皮包
-        const strap = new THREE.Mesh(new THREE.TorusGeometry(r * 0.5, r * 0.045, 6, 24), new THREE.MeshToonMaterial({ color: bagDark }));
-        strap.position.set(0, r * 0.95, 0);
-        strap.rotation.x = Math.PI / 2;
-        strap.rotation.y = 0.5;
-        strap.scale.set(1, 0.78, 1);
-        this.animRoot.add(strap);
-        const pouch = new THREE.Mesh(new THREE.BoxGeometry(r * 0.4, r * 0.34, r * 0.22), new THREE.MeshToonMaterial({ color: bagHex }));
-        pouch.position.set(-r * 0.5, r * 0.72, r * 0.05);   // 左腰
-        addOutline(pouch, 0.05);
-        this.animRoot.add(pouch);
-        const flap = new THREE.Mesh(new THREE.BoxGeometry(r * 0.42, r * 0.16, r * 0.24), new THREE.MeshToonMaterial({ color: bagDark }));
-        flap.position.set(-r * 0.5, r * 0.86, r * 0.05);
-        this.animRoot.add(flap);
+        // ===== 探险小书包（背后，呼应"进入蛋世界探险的女孩"）=====
+        const bagHex = 0xc8743a, bagDark = darkenHex(0xc8743a, 0.7);
+        const pack = new THREE.Mesh(new THREE.BoxGeometry(r * 0.46, r * 0.5, r * 0.24), new THREE.MeshToonMaterial({ color: bagHex }));
+        pack.position.set(0, r * 1.05, r * 0.38);
+        addOutline(pack, 0.05);
+        this.animRoot.add(pack);
+        const packFlap = new THREE.Mesh(new THREE.BoxGeometry(r * 0.48, r * 0.18, r * 0.26), new THREE.MeshToonMaterial({ color: bagDark }));
+        packFlap.position.set(0, r * 1.22, r * 0.38);
+        this.animRoot.add(packFlap);
+        for (const sx of [-1, 1]) {   // 两条肩带
+            const strap = new THREE.Mesh(new THREE.BoxGeometry(r * 0.06, r * 0.5, r * 0.05), new THREE.MeshToonMaterial({ color: bagDark }));
+            strap.position.set(sx * r * 0.22, r * 1.12, -r * 0.02);
+            strap.rotation.x = 0.2;
+            this.animRoot.add(strap);
+        }
 
         // 动画状态
         this._animScaleXZ = 1;
@@ -9068,6 +9068,77 @@ export class Game3D {
         this._wasInAir = false;
 
         this.scene.add(this.player);
+    }
+
+    // 头发：后发 + 刘海 + 4 种发型（twin 双马尾会随走动摆 → this._scarfTail）
+    _buildHair(styleId, hairMat, dressHex, headY, headR, r) {
+        this._scarfTail = null;
+        // 后发（盖住后脑+头顶，往后偏一点让脸露出来）
+        const back = new THREE.Mesh(new THREE.SphereGeometry(headR * 1.08, 20, 16), hairMat());
+        back.scale.set(1.02, 1.05, 1.0);
+        back.position.set(0, headY + headR * 0.1, headR * 0.16);
+        addOutline(back, 0.04);
+        this.animRoot.add(back);
+        // 刘海（额前一片，压扁，盖住额头到眉上）
+        const bangs = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.92, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), hairMat());
+        bangs.position.set(0, headY + headR * 0.42, -headR * 0.12);
+        bangs.scale.set(1.06, 0.8, 1.06);
+        this.animRoot.add(bangs);
+        // 侧发（两鬓垂一点）
+        for (const sx of [-1, 1]) {
+            const side = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.3, 10, 10), hairMat());
+            side.scale.set(0.6, 1.5, 0.6);
+            side.position.set(sx * headR * 0.92, headY - headR * 0.1, -headR * 0.2);
+            this.animRoot.add(side);
+        }
+
+        const tieMat = new THREE.MeshToonMaterial({ color: darkenHex(dressHex, 0.9) });
+
+        if (styleId === 'twin') {
+            // 双马尾：脑后一个 pivot 挂两束，走动一起甩
+            const pivot = new THREE.Group();
+            pivot.position.set(0, headY + headR * 0.2, headR * 0.2);
+            for (const sx of [-1, 1]) {
+                const tie = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.16, 8, 8), tieMat);
+                tie.position.set(sx * headR * 0.85, 0, 0);
+                pivot.add(tie);
+                const tail = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.34, 12, 12), hairMat());
+                tail.scale.set(0.7, 1.7, 0.7);
+                tail.position.set(sx * headR * 1.0, -headR * 0.8, 0);
+                tail.rotation.z = sx * 0.18;
+                addOutline(tail, 0.04);
+                pivot.add(tail);
+            }
+            this.animRoot.add(pivot);
+            this._scarfTail = pivot;
+        } else if (styleId === 'braids') {
+            // 麻花辫：两侧各 4 节小球往下，发尾扎带
+            const pivot = new THREE.Group();
+            pivot.position.set(0, headY + headR * 0.1, headR * 0.05);
+            for (const sx of [-1, 1]) {
+                for (let i = 0; i < 4; i++) {
+                    const seg = new THREE.Mesh(new THREE.SphereGeometry(headR * (0.26 - i * 0.03), 10, 8), hairMat());
+                    seg.position.set(sx * headR * 0.92, -headR * (0.2 + i * 0.42), -headR * 0.05);
+                    pivot.add(seg);
+                }
+                const tie = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.12, 8, 8), tieMat);
+                tie.position.set(sx * headR * 0.92, -headR * (0.2 + 4 * 0.42), -headR * 0.05);
+                pivot.add(tie);
+            }
+            this.animRoot.add(pivot);
+            this._scarfTail = pivot;
+        } else if (styleId === 'bun') {
+            // 丸子头：头顶发髻 + 小发带
+            const bun = new THREE.Mesh(new THREE.SphereGeometry(headR * 0.42, 14, 12), hairMat());
+            bun.position.set(0, headY + headR * 1.05, headR * 0.05);
+            addOutline(bun, 0.04);
+            this.animRoot.add(bun);
+            const ring = new THREE.Mesh(new THREE.TorusGeometry(headR * 0.42, headR * 0.07, 6, 16), tieMat);
+            ring.position.set(0, headY + headR * 0.78, headR * 0.05);
+            ring.rotation.x = Math.PI / 2;
+            this.animRoot.add(ring);
+        }
+        // short：只有后发+刘海+侧发，已够
     }
 
     _addAccessory(type, top, hr) {
@@ -9087,20 +9158,21 @@ export class Game3D {
             const knot = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 12, 12), bowMat);
             knot.position.y = top + hr * 0.06;
             this.animRoot.add(knot);
-        } else if (type === 'leaf') {
-            const stemMat = new THREE.MeshToonMaterial({ color: 0x4a8a3a });
-            const leafMat = new THREE.MeshToonMaterial({ color: 0x86d96a });
-            const stem = new THREE.Mesh(new THREE.CylinderGeometry(hr * 0.06, hr * 0.06, hr * 0.5, 8), stemMat);
-            stem.position.y = top + hr * 0.16;
-            this.animRoot.add(stem);
-            for (const sx of [-1, 1]) {
-                const leaf = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.26, 10, 10), leafMat);
-                leaf.scale.set(0.55, 1.5, 0.55);
-                leaf.position.set(sx * hr * 0.22, top + hr * 0.3, 0);
-                leaf.rotation.z = sx * 0.65;
-                leaf.castShadow = true;
-                this.animRoot.add(leaf);
+        } else if (type === 'flower') {
+            // 侧戴一朵小花（5 片花瓣 + 黄花心），别在头侧更像女孩发饰
+            const petalMat = new THREE.MeshToonMaterial({ color: 0xff7ab0 });
+            const coreMat = new THREE.MeshToonMaterial({ color: 0xffe066 });
+            const fx = hr * 0.78, fy = top - hr * 0.25, fz = -hr * 0.2;
+            for (let i = 0; i < 5; i++) {
+                const a = (i / 5) * Math.PI * 2;
+                const petal = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 8, 8), petalMat);
+                petal.scale.set(1, 0.5, 1);
+                petal.position.set(fx + Math.cos(a) * hr * 0.18, fy + Math.sin(a) * hr * 0.18, fz);
+                this.animRoot.add(petal);
             }
+            const core = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.12, 10, 8), coreMat);
+            core.position.set(fx, fy, fz);
+            this.animRoot.add(core);
         } else if (type === 'crown') {
             const crownMat = new THREE.MeshToonMaterial({ color: 0xffd700 });
             const band = new THREE.Mesh(
