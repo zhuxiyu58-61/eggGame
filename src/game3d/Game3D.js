@@ -5455,12 +5455,14 @@ export class Game3D {
     // ========= 怪物 + 玩家血量 + 战斗 =========
     _buildMonsters() {
         this.monsters = [];
-        this.playerHP = 5;
+        this.playerHP = 5;          // 血条：当前这条命的血量（挨打就掉）
         this.playerHPMax = 5;
+        this.playerLives = 3;       // 爱心：命数（血条掉光"倒下"才扣 1 颗）
+        this.playerLivesMax = 5;
         this._attackCooldown = 0;
         this._invincible = 0;
         // 头顶血条 + 首画血条延后：此刻 this.player 还没建（_buildPlayer 在 _buildWorld 之后）
-        setTimeout(() => { this._buildPlayerHPBar(); this._renderPlayerHP(); }, 50);
+        setTimeout(() => { this._buildPlayerHPBar(); this._renderPlayerHP(); this._renderHearts(); }, 50);
         // 按距离分布：近处普通、中圈混快怪、远处大怪镇守（越远越危险）
         const spots = [
             { x: 18, z: -8,  type: 'normal' },   // 东路
@@ -6021,20 +6023,28 @@ export class Game3D {
     _collectHeart(h) {
         this._disposeHeart(h);
         if (this.playerHP < this.playerHPMax) {
+            // 血条没满 → 先回血条
             this.playerHP = Math.min(this.playerHPMax, this.playerHP + 1);
             this._renderPlayerHP();
-            this._showEasterBadge('❤️ +1 生命');
+            this._showEasterBadge('❤️ 回血 +1');
             this._hpBarFlash = 0.4;                 // 头顶血条放大闪一下
-            if (this._hpChip) {
-                this._hpChip.animate(
-                    [{ transform: 'scale(1.5)', filter: 'brightness(1.6)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
-                    { duration: 420, easing: 'ease-out' }
-                );
-            }
             this._tone(660, 0.12, 'sine', 0.07);
             this._tone(990, 0.18, 'sine', 0.06, 0.08);
+        } else if (this.playerLives < this.playerLivesMax) {
+            // 血条已满 → 多得一条命（爱心 +1）
+            this.playerLives++;
+            this._renderHearts();
+            this._showEasterBadge('💖 多一颗爱心！');
+            if (this._hpChip) {
+                this._hpChip.animate(
+                    [{ transform: 'scale(1.6)', filter: 'brightness(1.8)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
+                    { duration: 460, easing: 'ease-out' }
+                );
+            }
+            this._tone(720, 0.12, 'sine', 0.07);
+            this._tone(1080, 0.2, 'sine', 0.06, 0.08);
         } else {
-            this._showEasterBadge('❤️ 已经满血啦');
+            this._showEasterBadge('❤️ 满血满命啦');
             this._tone(880, 0.12, 'sine', 0.05);
         }
     }
@@ -6056,15 +6066,34 @@ export class Game3D {
         this._flashDamageScreen();
         this._screenShake();
         this._spawnDamageNumber(dmg);
-        if (this._hpChip) {
-            this._hpChip.animate(
-                [{ transform: 'scale(1.6)', filter: 'brightness(2.2)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
-                { duration: 450, easing: 'ease-out' }
-            );
-        }
         this._tone(150, 0.2, 'sawtooth', 0.09);
         this._tone(90, 0.25, 'square', 0.06, 0.05);
-        if (this.playerHP <= 0) this._playerDown();
+        if (this.playerHP <= 0) this._loseLife(fromDx, fromDz);
+    }
+
+    // 血条掉光 → 倒下，扣 1 颗爱心；还有爱心就原地满血站起来，没爱心了才真正回广场
+    _loseLife(fromDx, fromDz) {
+        this.playerLives = Math.max(0, this.playerLives - 1);
+        this._renderHearts();
+        // 扣心这一下，HUD 爱心放大闪一下（之前是每次挨打都闪，现在只在真扣心时闪）
+        if (this._hpChip) {
+            this._hpChip.animate(
+                [{ transform: 'scale(1.7)', filter: 'brightness(2.4)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
+                { duration: 550, easing: 'ease-out' }
+            );
+        }
+        if (this.playerLives > 0) {
+            // 还有命：血条回满、原地弹起、短暂无敌，继续玩（不丢宝物）
+            this.playerHP = this.playerHPMax;
+            this._renderPlayerHP();
+            this._invincible = 1.8;
+            this.playerVy = 4; this.onGround = false;
+            this._showEasterBadge(`💔 倒下了！还剩 ❤️ ×${this.playerLives}`);
+            this._tone(200, 0.3, 'sawtooth', 0.09);
+            this._tone(120, 0.35, 'square', 0.06, 0.06);
+        } else {
+            this._playerDown();
+        }
     }
 
     // 屏幕震动（抖一下画布，最直观的"挨打了"反馈）
@@ -6151,8 +6180,8 @@ export class Game3D {
     }
 
     _playerDown() {
-        // 倒下：扔掉宝物，回广场，满血
-        this._showEasterBadge(`💀 倒下了！丢失 💰 ${this.carriedValue.toLocaleString()}`);
+        // 爱心全用光：真正倒下——扔掉宝物，回广场，爱心+血条都补满重来
+        this._showEasterBadge(`💀 爱心都用光了！丢失 💰 ${this.carriedValue.toLocaleString()}，回广场重来`);
         this.carriedValue = 0;
         this._renderTreasureChip();
         this.player.position.set(0, 0.6, 6);
@@ -6160,8 +6189,10 @@ export class Game3D {
         this.velocity.z = 0;
         this.playerVy = 0;
         this.playerHP = this.playerHPMax;
-        this._invincible = 2.0;
+        this.playerLives = this.playerLivesMax;
+        this._invincible = 2.5;
         this._renderPlayerHP();
+        this._renderHearts();
         this._tone(80, 1.0, 'sawtooth', 0.10);
     }
 
@@ -6182,13 +6213,17 @@ export class Game3D {
         this._playerHPTex = tex;
     }
 
-    _renderPlayerHP() {
+    // HUD 爱心 = 命数（只在"倒下"时才掉）
+    _renderHearts() {
         if (!this._hpChip) this._hpChip = document.getElementById('game-hp');
         if (this._hpChip) {
-            const heart = '❤️'.repeat(this.playerHP) + '🖤'.repeat(this.playerHPMax - this.playerHP);
-            this._hpChip.textContent = heart;
+            this._hpChip.textContent =
+                '❤️'.repeat(this.playerLives) + '🖤'.repeat(Math.max(0, this.playerLivesMax - this.playerLives));
         }
-        // 头顶分段血条
+    }
+
+    _renderPlayerHP() {
+        // 头顶分段血条 = 当前这条命的血量
         if (this._playerHPCv) {
             const ctx = this._playerHPCv.getContext('2d');
             const W = 100, H = 16, n = this.playerHPMax;
