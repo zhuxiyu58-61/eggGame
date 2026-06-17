@@ -8630,11 +8630,17 @@ export class Game3D {
     }
 
     _addTree(x, z) {
+        // 针叶尖塔树：轮廓与叠球阔叶冠完全不同，约 16%
+        if (Math.random() < 0.16) { this._addConiferTree(x, z); return; }
+
         const group = new THREE.Group();
-        // 4 种树型随机 + 每棵在树型内再大幅随机 → 不会两棵一样
+        // 阔叶：4 种树型随机 + 每棵在型内再大幅随机；叶色多数绿、少数秋色 → 一眼像不同树种
         const greens = [0x4f9a4a, 0x5aa84f, 0x6cb56c, 0x7cc25a, 0x4a8f55, 0x8fc96a, 0x3f8a48, 0x66ad5a];
+        const autumns = [0xe5862b, 0xf0a93a, 0xd9532b, 0xe7c24a, 0xcf6b2e, 0xc94f3c];
+        const isAutumn = Math.random() < 0.20;
+        const palette = isAutumn ? autumns : greens;
         const barkCols = [0x7a4a26, 0x8a5a2e, 0x6e4322, 0x946238];
-        const baseGreen = greens[(Math.random() * greens.length) | 0];
+        const baseGreen = palette[(Math.random() * palette.length) | 0];
         const bark = new THREE.MeshToonMaterial({ color: barkCols[(Math.random() * barkCols.length) | 0] });
 
         const kind = Math.random();
@@ -8702,6 +8708,39 @@ export class Game3D {
         group.scale.setScalar(s);
         this.scene.add(group);
         this._addPropCollider(x, z, 0.5 * s, 2.6 * s);
+    }
+
+    // 绿针叶尖塔树：层叠圆锥（上窄下宽），轮廓和叠球阔叶冠截然不同
+    _addConiferTree(x, z) {
+        const group = new THREE.Group();
+        const trunkH = 0.9 + Math.random() * 0.6;
+        const bark = new THREE.MeshToonMaterial({ color: [0x6e4322, 0x7a4a26, 0x5e3a1e][(Math.random() * 3) | 0] });
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, trunkH, 7), bark);
+        trunk.position.y = trunkH / 2; trunk.castShadow = true; addOutline(trunk, 0.05); group.add(trunk);
+        // 整棵一个绿调，逐层微调深浅
+        const cgreens = [0x2f7a44, 0x36843f, 0x49a04d, 0x277038, 0x3f9150, 0x44995a];
+        const base = cgreens[(Math.random() * cgreens.length) | 0];
+        const layers = 4 + ((Math.random() < 0.5) ? 1 : 0);
+        const baseR = 0.55 + Math.random() * 0.28;
+        const h = 0.72 + Math.random() * 0.26;
+        let y = trunkH;
+        for (let i = layers - 1; i >= 0; i--) {
+            const r = baseR * (0.38 + i * 0.18);                  // 下宽上窄
+            const f = 0.86 + Math.random() * 0.28;
+            const col = f < 1 ? darkenHex(base, f) : lightenHex(base, (f - 1) * 0.5);
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(r, h, 9), new THREE.MeshToonMaterial({ color: col }));
+            cone.position.y = y + h / 2;
+            cone.rotation.y = Math.random() * Math.PI;
+            cone.scale.set(1, 1, 0.9 + Math.random() * 0.2);       // 略压扁不正圆
+            cone.castShadow = true; addOutline(cone, 0.04); group.add(cone);
+            y += h * 0.62;
+        }
+        group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI * 2;
+        const s = 0.9 + Math.random() * 0.7;
+        group.scale.setScalar(s);
+        this.scene.add(group);
+        this._addPropCollider(x, z, 0.45 * s, 2.6 * s);
     }
 
     _initBirdFlock() {
