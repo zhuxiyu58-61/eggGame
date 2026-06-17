@@ -913,6 +913,7 @@ export class Game3D {
         this.__t('buildSnowBiome', () => this._buildSnowBiome());
         this.__t('buildDesertBiome', () => this._buildDesertBiome());
         this.__t('buildForestBiome', () => this._buildForestBiome());
+        this.__t('buildBlossomBiome', () => this._buildBlossomBiome());
         this.__t('blendBiomeEdges', () => this._blendBiomeEdges());
         this._buildSnowSprite();
         this._buildLakeTurtle();
@@ -3849,6 +3850,258 @@ export class Game3D {
         }
     }
 
+    // ===================== 樱花谷（第 5 区，东南）=====================
+    _buildBlossomBiome() {
+        const CX = 123, CZ = 22;
+        this._blossomCenter = { x: CX, z: CZ };
+        const inValley = (x, z) => x > 80 && x < 166 && z > -26 && z < 70;
+
+        // 粉色谷地
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(92, 100), new THREE.MeshToonMaterial({ color: 0xe8cad9 }));
+        ground.rotation.x = -Math.PI / 2; ground.position.set(CX, 0.028, CZ); ground.receiveShadow = true;
+        this.scene.add(ground);
+        // 落英铺地（粉花瓣贴片）
+        const petalMat = new THREE.MeshToonMaterial({ color: 0xf3b6cf, transparent: true, opacity: 0.7 });
+        for (let i = 0; i < 80; i++) {
+            const x = CX + (Math.random() - 0.5) * 88, z = CZ + (Math.random() - 0.5) * 96;
+            if (!inValley(x, z)) continue;
+            const pt = new THREE.Mesh(new THREE.CircleGeometry(0.1 + Math.random() * 0.14, 5), petalMat);
+            pt.rotation.x = -Math.PI / 2; pt.rotation.z = Math.random() * Math.PI;
+            pt.position.set(x, 0.045 + Math.random() * 0.01, z);
+            this.scene.add(pt);
+        }
+        // 樱花树散布（避开中心地标区）
+        for (let i = 0; i < 24; i++) {
+            const x = CX + (Math.random() - 0.5) * 82, z = CZ + (Math.random() - 0.5) * 92;
+            if (!inValley(x, z) || Math.hypot(x - CX, z - CZ) < 10) continue;
+            this._addCherryTree(x, z, 0.85 + Math.random() * 0.5);
+        }
+        // 几丛密花
+        for (let c = 0; c < 7; c++) {
+            const bx = CX + (Math.random() - 0.5) * 74, bz = CZ + (Math.random() - 0.5) * 84;
+            if (!inValley(bx, bz)) continue;
+            this._addFlowerCluster(bx, bz);
+        }
+        // 谷口花藤拱门（西侧入口）
+        this._addFlowerArch(84, CZ);
+        // 谷心：大樱花树 + 花仙子
+        this._buildBlossomFairy(CX, CZ);
+        // 飘落花瓣
+        this._initBlossomPetals();
+    }
+
+    _addCherryTree(x, z, s = 1) {
+        const g = new THREE.Group();
+        const bark = new THREE.MeshToonMaterial({ color: 0x6e4a3a });
+        const trunkH = 1.7 + Math.random() * 0.8;
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.24, trunkH, 8), bark);
+        trunk.position.y = trunkH / 2; trunk.rotation.z = (Math.random() - 0.5) * 0.12;
+        trunk.castShadow = true; addOutline(trunk, 0.05); g.add(trunk);
+        // 两根伸展枝
+        for (let b = 0; b < 2; b++) {
+            const br = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, trunkH * 0.6, 6), bark);
+            const sx = b === 0 ? 1 : -1;
+            br.position.set(sx * 0.25, trunkH * 0.72, 0); br.rotation.z = sx * 0.7; g.add(br);
+        }
+        // 粉色蓬松树冠（多团叠球，深浅粉）
+        const pinks = [0xff9ec4, 0xffb3d1, 0xf78fb6, 0xffc6dd, 0xf7a8c8];
+        const base = pinks[(Math.random() * pinks.length) | 0];
+        const crownY = trunkH + 0.5, blobs = 6;
+        for (let i = 0; i < blobs; i++) {
+            const a = (i / blobs) * Math.PI * 2 + Math.random() * 0.7;
+            const dist = i === 0 ? 0 : 0.6 * (0.5 + Math.random() * 0.7);
+            const rad = i === 0 ? 1.0 : 0.55 + Math.random() * 0.4;
+            const f = 0.85 + Math.random() * 0.3;
+            const col = f < 1 ? darkenHex(base, f) : lightenHex(base, (f - 1) * 0.6);
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(rad, 10, 8), new THREE.MeshToonMaterial({ color: col }));
+            ball.position.set(Math.cos(a) * dist, crownY + (i === 0 ? 0.4 : 0) + (Math.random() - 0.35) * 0.6, Math.sin(a) * dist);
+            ball.scale.y = 0.85 + Math.random() * 0.3; ball.castShadow = true; addOutline(ball, 0.035); g.add(ball);
+        }
+        g.position.set(x, 0, z); g.rotation.y = Math.random() * Math.PI * 2;
+        g.scale.setScalar(s);
+        this.scene.add(g);
+        this._addPropCollider(x, z, 0.5 * s, 2.6 * s);
+        return g;
+    }
+
+    _addFlowerCluster(x, z) {
+        const petalCols = [0xff6f91, 0xffd24a, 0x8ec7ff, 0xc78cff, 0xff9e5e, 0xffffff];
+        const stemMat = new THREE.MeshToonMaterial({ color: 0x4f8a3a });
+        const centerMat = new THREE.MeshToonMaterial({ color: 0xffe08a });
+        for (let i = 0; i < 7; i++) {
+            const fx = x + (Math.random() - 0.5) * 2.4, fz = z + (Math.random() - 0.5) * 2.4;
+            const h = 0.28 + Math.random() * 0.18;
+            const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, h, 5), stemMat);
+            stem.position.set(fx, h / 2, fz); this.scene.add(stem);
+            const col = petalCols[(Math.random() * petalCols.length) | 0];
+            const petMat = new THREE.MeshToonMaterial({ color: col });
+            for (let p = 0; p < 5; p++) {
+                const a = (p / 5) * Math.PI * 2;
+                const petal = new THREE.Mesh(new THREE.SphereGeometry(0.07, 7, 5), petMat);
+                petal.scale.set(1, 0.5, 1.5); petal.position.set(fx + Math.cos(a) * 0.1, h, fz + Math.sin(a) * 0.1);
+                this.scene.add(petal);
+            }
+            const core = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), centerMat);
+            core.position.set(fx, h, fz); this.scene.add(core);
+        }
+    }
+
+    _addFlowerArch(x, z) {
+        const g = new THREE.Group();
+        const wood = new THREE.MeshToonMaterial({ color: 0x8a6a52 });
+        for (const sx of [-1, 1]) {
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 3.2, 8), wood);
+            post.position.set(sx * 1.8, 1.6, 0); addOutline(post, 0.03); g.add(post);
+        }
+        // 拱顶（半环）
+        const arch = new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.13, 8, 16, Math.PI), wood);
+        arch.position.y = 3.2; arch.rotation.z = Math.PI; addOutline(arch, 0.03);
+        // Torus 默认在 xy 平面，开口朝下需绕 z 转 PI（已转）；让它横跨 x：保持 xy 平面正好
+        g.add(arch);
+        // 拱上爬满粉花
+        const pinks = [0xff9ec4, 0xffb3d1, 0xffc6dd, 0xf78fb6];
+        for (let i = 0; i < 26; i++) {
+            const a = Math.PI * (i / 25);
+            const r = 1.8 + (Math.random() - 0.5) * 0.25;
+            const bx = Math.cos(a) * r, by = 3.2 + Math.sin(a) * r;
+            const blob = new THREE.Mesh(new THREE.SphereGeometry(0.16 + Math.random() * 0.12, 8, 6),
+                new THREE.MeshToonMaterial({ color: pinks[(Math.random() * pinks.length) | 0] }));
+            blob.position.set(bx, by, (Math.random() - 0.5) * 0.4); g.add(blob);
+        }
+        g.position.set(x, 0, z); g.rotation.y = Math.PI / 2;  // 横跨南北向通道
+        this.scene.add(g);
+        this._addPropCollider(x, z - 1.8, 0.3, 3.2);
+        this._addPropCollider(x, z + 1.8, 0.3, 3.2);
+    }
+
+    _buildBlossomFairy(x, z) {
+        // 谷心大樱花树（更大，半开——浇水后盛放）
+        const tree = this._addCherryTree(x, z, 1.9);
+        this._blossomTree = { group: tree, x, z, bloomed: false };
+        // 花仙子：发光粉球 + 小裙身 + 翅膀
+        const g = new THREE.Group();
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this._makeSoftGlowTex ? this._makeSoftGlowTex() : null,
+            color: 0xffc0e0, transparent: true, opacity: 0.5,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        halo.scale.set(2.4, 2.4, 1); halo.position.y = 1.4; g.add(halo);
+        const body = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.7, 10), new THREE.MeshToonMaterial({ color: 0xff9ec4 }));
+        body.position.y = 1.0; addOutline(body, 0.03); g.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), new THREE.MeshToonMaterial({ color: 0xffe3d0 }));
+        head.position.y = 1.5; addOutline(head, 0.03); g.add(head);
+        // 花冠
+        for (let i = 0; i < 5; i++) {
+            const a = (i / 5) * Math.PI * 2;
+            const pet = new THREE.Mesh(new THREE.SphereGeometry(0.08, 7, 5), new THREE.MeshToonMaterial({ color: 0xff6f91 }));
+            pet.scale.set(1, 0.5, 1.4); pet.position.set(Math.cos(a) * 0.18, 1.72, Math.sin(a) * 0.18); g.add(pet);
+        }
+        // 翅膀
+        for (const sx of [-1, 1]) {
+            const wing = new THREE.Mesh(new THREE.CircleGeometry(0.3, 10), new THREE.MeshToonMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
+            wing.position.set(sx * 0.3, 1.15, -0.18); wing.rotation.y = sx * 0.6; g.add(wing);
+        }
+        g.position.set(x + 3, 0, z + 2);
+        this.scene.add(g);
+        this._fairyRec = this._attachStoryNpc(
+            g, '花仙子',
+            '🌸 朝大樱花树浇浇水(E)，给它打打气～',
+            2.0, 2.9
+        );
+    }
+
+    _makeSoftGlowTex() {
+        if (this._softGlowTex) return this._softGlowTex;
+        const c = document.createElement('canvas'); c.width = c.height = 64;
+        const ctx = c.getContext('2d');
+        const grd = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        grd.addColorStop(0, 'rgba(255,255,255,0.95)');
+        grd.addColorStop(0.4, 'rgba(255,200,230,0.6)');
+        grd.addColorStop(1, 'rgba(255,200,230,0)');
+        ctx.fillStyle = grd; ctx.fillRect(0, 0, 64, 64);
+        this._softGlowTex = new THREE.CanvasTexture(c);
+        return this._softGlowTex;
+    }
+
+    // 谷心大樱花树盛放（浇水触发）：树冠变大变密 + 花瓣爆发 + 花仙子道谢
+    _bloomBlossomTree() {
+        const bt = this._blossomTree;
+        if (!bt || bt.bloomed) return;
+        bt.bloomed = true;
+        bt.group.scale.multiplyScalar(1.18);
+        // 额外补一圈盛放花球
+        const pinks = [0xff9ec4, 0xffb3d1, 0xffc6dd, 0xf78fb6];
+        for (let i = 0; i < 10; i++) {
+            const a = (i / 10) * Math.PI * 2;
+            const r = 1.4 + Math.random() * 0.6;
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(0.7 + Math.random() * 0.4, 10, 8),
+                new THREE.MeshToonMaterial({ color: pinks[i % pinks.length] }));
+            ball.position.set(Math.cos(a) * r, 4.6 + Math.random() * 1.0, Math.sin(a) * r);
+            addOutline(ball, 0.035); bt.group.add(ball);
+        }
+        // 花瓣爆发
+        for (let i = 0; i < 40; i++) this._spawnPetal(bt.x + (Math.random() - 0.5) * 4, 5 + Math.random() * 2, bt.z + (Math.random() - 0.5) * 4, true);
+        if (this._fairyRec) this._setStoryLine(this._fairyRec, '🌸 它精神多啦！谢谢你，小蛋～');
+        this._showEasterBadge('🌸 大樱花树盛放啦！花仙子好开心～');
+        this._playWin();
+    }
+
+    // —— 飘落花瓣粒子（只在樱花谷附近活跃）——
+    _initBlossomPetals() {
+        this._petals = [];
+        this._petalTimer = 0;
+        this._petalGeo = new THREE.PlaneGeometry(0.16, 0.16);
+    }
+
+    _spawnPetal(x, y, z, burst = false) {
+        if (!this._petals) return;
+        const cols = [0xffb3d1, 0xff9ec4, 0xffc6dd, 0xffffff];
+        const m = new THREE.Mesh(this._petalGeo, new THREE.MeshBasicMaterial({
+            color: cols[(Math.random() * cols.length) | 0], transparent: true, opacity: 0.9,
+            side: THREE.DoubleSide, depthWrite: false, fog: true,
+        }));
+        m.position.set(x, y, z);
+        m.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+        m.userData = {
+            vy: burst ? -(0.5 + Math.random() * 1.2) : -(0.4 + Math.random() * 0.5),
+            vx: (Math.random() - 0.5) * (burst ? 2 : 0.6),
+            vz: (Math.random() - 0.5) * (burst ? 2 : 0.6),
+            spin: (Math.random() - 0.5) * 4, life: burst ? 2.5 : 7,
+        };
+        this.scene.add(m); this._petals.push(m);
+    }
+
+    _updateBlossomPetals(dt) {
+        if (!this._petals) return;
+        const p = this.player.position;
+        const c = this._blossomCenter;
+        // 玩家在谷里(或附近) → 持续从天上飘花瓣
+        if (c) {
+            const near = Math.abs(p.x - c.x) < 60 && Math.abs(p.z - c.z) < 65;
+            if (near) {
+                this._petalTimer -= dt;
+                if (this._petalTimer <= 0 && this._petals.length < 90) {
+                    this._petalTimer = 0.12;
+                    this._spawnPetal(p.x + (Math.random() - 0.5) * 36, p.y + 9 + Math.random() * 4, p.z + (Math.random() - 0.5) * 36);
+                }
+            }
+        }
+        const wx = this.wind ? Math.cos(this.wind.dir) * this.wind.strength : 0;
+        const wz = this.wind ? Math.sin(this.wind.dir) * this.wind.strength : 0;
+        this._petals = this._petals.filter(m => {
+            const u = m.userData;
+            u.life -= dt;
+            m.position.x += (u.vx + wx) * dt;
+            m.position.y += u.vy * dt;
+            m.position.z += (u.vz + wz) * dt;
+            m.rotation.y += u.spin * dt; m.rotation.x += u.spin * 0.5 * dt;
+            if (u.life <= 0 || m.position.y < 0.1) {
+                this.scene.remove(m); m.material.dispose(); return false;
+            }
+            return true;
+        });
+    }
+
     // ===================== 区域感受系统 =====================
     _initRegionFeel() {
         this._currentRegion = 'home';
@@ -3863,6 +4116,7 @@ export class Game3D {
             desert: { story: '☀️ 太阳沙漠<br>一望无际的沙海，天却灰蒙蒙的。<br>金字塔的太阳宝石丢了，旅人在等人帮忙…' },
             lake:   { story: '🌊 月光湖<br>水边好清凉～<br>湖底的老乌龟好像在找什么东西。' },
             forest: { story: '🌲 萤火森林<br>雾蒙蒙的，到处是会发光的蘑菇和萤火虫。<br>森林深处的小精灵在找一样宝贝…' },
+            blossom: { story: '🌸 樱花谷<br>风一吹，粉色花瓣像下雪一样落下来。<br>花仙子说：等钟楼重新亮起，这里会开成一整片花海～' },
             home:   { story: '🌿 回到温暖的村庄，真舒服~<br>去广场找蛋爷爷问问该做什么。' },
         };
 
@@ -3897,6 +4151,7 @@ export class Game3D {
         if (z > 80 && Math.abs(x) < 104) return 'desert';
         if (Math.hypot(x - 48, z + 42) < 32) return 'lake';
         if (x < -66 && Math.abs(z) < 62) return 'forest';
+        if (x > 80 && x < 166 && z > -26 && z < 70) return 'blossom';
         return 'home';
     }
 
@@ -3917,6 +4172,8 @@ export class Game3D {
         if (region === 'desert') heatTarget = Math.max(0.25, Math.min(1, (p.z - 80) / 105));
         if (region === 'lake')   coolTarget = 0.6;
         if (region === 'forest') coolTarget = 0.42;
+        // 樱花谷：柔粉静谧（不冷不热）
+        this._blossomT = approach(this._blossomT || 0, region === 'blossom' ? 0.5 : 0, dt * 1.5);
 
         // —— 篝火取暖：靠近已点燃篝火 → 压制寒冷 + 暖意 + 慢回血 ——
         const fire = this._nearestCampfire();
@@ -3960,6 +4217,10 @@ export class Game3D {
             this._tintEl.style.background =
                 `radial-gradient(ellipse at center, transparent 42%, rgba(80,205,210,0.35) 100%)`;
             this._tintEl.style.opacity = String(this._coolT);
+        } else if (this._blossomT > 0.02) {
+            this._tintEl.style.background =
+                `radial-gradient(ellipse at center, transparent 45%, rgba(255,160,205,0.3) 100%)`;
+            this._tintEl.style.opacity = String(this._blossomT);
         } else {
             this._tintEl.style.opacity = '0';
         }
@@ -6778,6 +7039,17 @@ export class Game3D {
                     });
                 }
             });
+        }
+
+        // 樱花谷·浇灌谷心大樱花树 → 盛放（剧情互动）
+        const bt = this._blossomTree;
+        if (bt && !bt.bloomed) {
+            const p = this.player.position;
+            if (Math.hypot(p.x - bt.x, p.z - bt.z) < 5) {
+                bt._waterCount = (bt._waterCount || 0) + 1;
+                if (bt._waterCount === 1) this._showEasterBadge('💧 再浇几下，让大樱花树打起精神～');
+                if (bt._waterCount >= 3) this._bloomBlossomTree();
+            }
         }
     }
 
@@ -10440,6 +10712,7 @@ export class Game3D {
         this._updateLaundry(performance.now() * 0.001);
         this._updateBunting(performance.now() * 0.001);
         this._updateCampfires(dt);
+        this._updateBlossomPetals(dt);
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
