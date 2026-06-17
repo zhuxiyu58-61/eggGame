@@ -883,6 +883,9 @@ export class Game3D {
         this.__t('blendBiomeEdges', () => this._blendBiomeEdges());
         this._buildSnowSprite();
         this._buildLakeTurtle();
+        this._buildDesertTraveler();
+        this._buildForestSpirit();
+        this._buildElder();
         this._buildFishingBoat();
         this._buildLighthouse();
         this._initGreetQuest();
@@ -1905,30 +1908,39 @@ export class Game3D {
         this._questDone = false;
         this.bellTowerPos = new THREE.Vector3(7, 0, 5);
 
-        // 三件心愿之物（含一束光柱指引，方便在大地图里找到）
-        // 1) 火种——冰雪国冰湖边
+        // 四件心愿之物。每件深埋在一个区域，由一只「守卫怪」看守：
+        // 打败守卫 → 心愿之物亮起可拿 → 拿起后要带回去交给该区的伙伴 → 才真正到手。
+        // 区域扩大后，伙伴在区域口、宝物在区域深处，来回是一趟真正的冒险。
         this._addQuestItem({
-            key: 'fireseed', x: -30, z: -88, color: 0xff7a2a, emissive: 0xff5500,
-            emoji: '🔥', label: '暖灯火种',
-            story: '🔥 拿到暖灯火种！<br>小雪精灵不再孤单啦。',
+            key: 'fireseed', region: 'snow', x: -20, z: -150,
+            color: 0xff7a2a, emissive: 0xff5500, emoji: '🔥', label: '暖灯火种',
+            guard: { x: -20, z: -145, type: 'tank' },
+            giver: '_snowSpriteRec', giverLabel: '小雪精灵', deliver: { x: -26, z: -74 },
+            story: '🔥 把暖灯火种交给了小雪精灵！它不冷了，笑啦～',
         });
-        // 2) 清泉之珠——沙漠绿洲（复用已埋好的发光珠子）
-        if (this._oasisGem) {
-            this.questItems.push({
-                key: 'springpearl', mesh: this._oasisGem, beam: this._addQuestBeam(this._oasisGem.position, 0x66e0ff),
-                baseY: this._oasisGem.position.y, phase: 0, collected: false,
-                emoji: '💧', label: '清泉之珠',
-                story: '💧 挖出清泉之珠！<br>绿洲会重新冒水的。',
-            });
-        }
-        // 3) 月光石——月光湖边
         this._addQuestItem({
-            key: 'moonstone', x: 38, z: -32, color: 0xdfeaff, emissive: 0x9ec4ff,
-            emoji: '🌙', label: '月光石',
-            story: '🌙 找到月光石！<br>湖底老乌龟笑了。',
+            key: 'springpearl', region: 'desert', x: 40, z: 186,
+            color: 0x66e0ff, emissive: 0x3399cc, emoji: '💧', label: '清泉之珠',
+            guard: { x: 40, z: 181, type: 'tank' },
+            giver: '_travelerRec', giverLabel: '沙漠旅人', deliver: { x: -30, z: 114 },
+            story: '💧 把清泉之珠交给旅人！绿洲重新冒出清泉啦～',
+        });
+        this._addQuestItem({
+            key: 'moonstone', region: 'lake', x: 60, z: -54,
+            color: 0xdfeaff, emissive: 0x9ec4ff, emoji: '🌙', label: '月光石',
+            guard: { x: 60, z: -54, type: 'tank' },
+            giver: '_turtleRec', giverLabel: '老乌龟', deliver: { x: 40, z: -33 },
+            story: '🌙 把月光石交给老乌龟！夜里它会照亮回家的路～',
+        });
+        this._addQuestItem({
+            key: 'starleaf', region: 'forest', x: -165, z: 30,
+            color: 0xaef0c0, emissive: 0x66e0a0, emoji: '🌿', label: '星光草',
+            guard: { x: -165, z: 25, type: 'tank' },
+            giver: '_spiritRec', giverLabel: '森林精灵', deliver: { x: -118, z: 4 },
+            story: '🌿 把星光草交给森林精灵！森林深处又亮起来啦～',
         });
 
-        // HUD：心愿之物进度
+        // HUD：心愿之物进度（顶部）
         this._questChip = document.createElement('div');
         Object.assign(this._questChip.style, {
             position: 'fixed', top: '64px', left: '50%',
@@ -1940,14 +1952,41 @@ export class Game3D {
             boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
         });
         document.body.appendChild(this._questChip);
+
+        // 当前目标条（左上常驻，随所在区域 + 任务阶段变化）——专治"不知道在干嘛"
+        this._objChip = document.createElement('div');
+        Object.assign(this._objChip.style, {
+            position: 'fixed', top: '96px', left: '12px',
+            padding: '8px 14px', maxWidth: '52vw',
+            background: 'rgba(20,16,40,0.55)', color: '#fff',
+            fontSize: '15px', fontWeight: 'bold', lineHeight: '1.45',
+            borderRadius: '12px', zIndex: '19', pointerEvents: 'none',
+            boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
+            borderLeft: '4px solid #ffd24a',
+        });
+        document.body.appendChild(this._objChip);
+
+        // 去掉绿洲那颗装饰宝珠，免得跟"清泉之珠"混淆（真正的珠子在沙漠深处）
+        if (this._oasisGem) {
+            this.scene.remove(this._oasisGem);
+            this._oasisGem.geometry.dispose(); this._oasisGem.material.dispose();
+            this._oasisGem = null;
+        }
+
         this._updateQuestHud();
 
-        // 回填存档：已收集的心愿之物静默回放，钟楼若已点亮则直接亮起
         const prog = this._loadProgress();
+        // 开场引子（仅首次：钟楼还没点亮过）
+        if (!prog.questDone) {
+            setTimeout(() => this._showEasterBadge(
+                '🔔 村庄的钟楼灭了…去雪原·沙漠·月光湖·萤火森林，打败守卫抢回 4 样心愿之物、带回来交给伙伴，就能重新点亮钟楼！'
+            ), 1400);
+        }
+        // 回填存档：已完成的心愿之物静默回放，钟楼若已点亮则直接亮起
         if (prog.quest && prog.quest.length) {
             for (const key of prog.quest) {
-                const it = this.questItems.find(i => i.key === key && !i.collected);
-                if (it) this._collectQuestItem(it, true);
+                const it = this.questItems.find(i => i.key === key && i.stage !== 'done');
+                if (it) this._finishQuestItem(it, true);
             }
         }
         if (prog.questDone && this.questCount >= this.questItems.length) {
@@ -1955,21 +1994,34 @@ export class Game3D {
         }
     }
 
-    _addQuestItem({ key, x, z, color, emissive, emoji, label, story }) {
+    _addQuestItem(opt) {
+        const { key, region, x, z, color, emissive, emoji, label, guard, giver, giverLabel, deliver, story } = opt;
         const mesh = new THREE.Mesh(
             new THREE.IcosahedronGeometry(0.55, 0),
             new STD_MAT({
-                color, emissive, emissiveIntensity: 1.3, metalness: 0.2, roughness: 0.3,
-            })
+                color, emissive, emissiveIntensity: 0.35, metalness: 0.2, roughness: 0.3,
+            })   // 锁定时暗淡，守卫倒下才亮起来
         );
         mesh.position.set(x, 1.4, z);
         mesh.castShadow = true;
         this.scene.add(mesh);
-        this.questItems.push({
-            key, mesh, beam: this._addQuestBeam(mesh.position, emissive),
-            baseY: 1.4, phase: Math.random() * Math.PI * 2, collected: false,
-            emoji, label, story,
-        });
+        const beam = this._addQuestBeam(mesh.position, emissive);
+        beam.material.opacity = 0.1;
+        // 守卫怪（守在宝物旁，打倒不复活）
+        let guardMon = null;
+        if (guard) {
+            guardMon = this._addMonster(guard.x, guard.z, guard.type || 'tank');
+            guardMon.temporary = true;
+        }
+        const item = {
+            key, region, mesh, beam, baseY: 1.4, phase: Math.random() * Math.PI * 2,
+            emoji, label, story, emissive,
+            giver, giverLabel, deliver: deliver || null,
+            guard: guardMon, stage: 'sealed', collected: false,
+            _guardDown: !guard,
+        };
+        if (guardMon) guardMon.guardItem = item;
+        this.questItems.push(item);
     }
 
     // 一束竖直光柱，远远就能看到心愿之物在哪
@@ -1992,23 +2044,41 @@ export class Game3D {
         const p = this.player.position;
 
         for (const it of this.questItems) {
-            if (it.collected) continue;
-            // 漂浮 + 自转 + 光柱呼吸
-            it.mesh.rotation.y = t * 1.5 + it.phase;
-            it.mesh.position.y = it.baseY + Math.sin(t * 1.8 + it.phase) * 0.2;
-            if (it.beam) it.beam.material.opacity = 0.3 + Math.sin(t * 2 + it.phase) * 0.1;
+            if (it.stage === 'done') continue;
 
-            const dx = p.x - it.mesh.position.x;
-            const dz = p.z - it.mesh.position.z;
-            const dist = Math.hypot(dx, dz);
-            if (dist < 2.2) {
-                it.mesh.position.x += dx * 6 * dt;   // 吸附
-                it.mesh.position.z += dz * 6 * dt;
-                if (dist < 0.9) this._collectQuestItem(it);
+            // 守卫被打倒 → 宝物解锁亮起
+            if (it.stage === 'sealed' && (it._guardDown || (it.guard && it.guard.state === 'ko'))) {
+                this._revealQuestItem(it);
+            }
+
+            // 漂浮 + 自转（sealed/revealed 时 mesh 都在）
+            if (it.mesh) {
+                it.mesh.rotation.y = t * 1.5 + it.phase;
+                it.mesh.position.y = it.baseY + Math.sin(t * 1.8 + it.phase) * 0.2;
+            }
+            if (it.beam && it.stage === 'revealed') {
+                it.beam.material.opacity = 0.34 + Math.sin(t * 2 + it.phase) * 0.12;
+            }
+
+            // 解锁后才能拿（吸附 + 拾取 → "携带"）
+            if (it.stage === 'revealed' && it.mesh) {
+                const dx = p.x - it.mesh.position.x;
+                const dz = p.z - it.mesh.position.z;
+                const dist = Math.hypot(dx, dz);
+                if (dist < 2.2) {
+                    it.mesh.position.x += dx * 6 * dt;
+                    it.mesh.position.z += dz * 6 * dt;
+                    if (dist < 0.9) this._grabQuestItem(it);
+                }
+            }
+
+            // 携带中 → 走近该区伙伴交差
+            if (it.stage === 'carrying' && it.deliver) {
+                if (Math.hypot(p.x - it.deliver.x, p.z - it.deliver.z) < 3.2) this._finishQuestItem(it);
             }
         }
 
-        // 集齐三样 → 引导回钟楼（钟楼亮一束金光）
+        // 全部交齐 → 引导回钟楼（钟楼亮一束金光）
         if (this._questReady && !this._questDone) {
             if (!this._bellBeam) {
                 this._bellBeam = this._addQuestBeam(this.bellTowerPos, 0xffd86b);
@@ -2016,35 +2086,64 @@ export class Game3D {
                 this._bellBeam.position.y = 7;
             }
             this._bellBeam.material.opacity = 0.32 + Math.sin(t * 3) * 0.12;
-            // 走到钟楼脚下 → 点亮通关
             if (Math.hypot(p.x - this.bellTowerPos.x, p.z - this.bellTowerPos.z) < 3.4) {
                 this._lightBellTower();
             }
         }
+
+        this._updateObjective();
     }
 
-    _collectQuestItem(it, silent = false) {
-        it.collected = true;
-        this.scene.remove(it.mesh);
-        if (it.mesh.geometry) it.mesh.geometry.dispose();
-        if (it.mesh.material) it.mesh.material.dispose();
+    // 守卫倒下：宝物亮起、可拿
+    _revealQuestItem(it) {
+        it.stage = 'revealed';
+        if (it.mesh && it.mesh.material) it.mesh.material.emissiveIntensity = 1.4;
+        if (it.beam) it.beam.material.opacity = 0.34;
+        this._tone(740, 0.12, 'sine', 0.07);
+        this._tone(1100, 0.16, 'sine', 0.06, 0.07);
+        this._showEasterBadge(`✨ 守卫倒下了！走过去拿起 ${it.emoji} ${it.label}`);
+    }
+
+    // 拿起宝物 → 进入"携带回去交差"
+    _grabQuestItem(it) {
+        it.stage = 'carrying';
+        if (it.mesh) {
+            this.scene.remove(it.mesh);
+            it.mesh.geometry?.dispose(); it.mesh.material?.dispose();
+            it.mesh = null;
+        }
         if (it.beam) {
             this.scene.remove(it.beam);
             it.beam.geometry.dispose(); it.beam.material.dispose();
+            it.beam = null;
         }
-        if (it.key === 'springpearl') this._oasisGem = null;  // 别再让沙漠 FX 引用它
+        this._updateQuestHud();
+        this._tone(880, 0.10, 'sine', 0.07);
+        this._tone(1320, 0.12, 'sine', 0.06, 0.06);
+        this._showEasterBadge(`${it.emoji} 拿到${it.label}！快带回去交给${it.giverLabel}`);
+    }
+
+    // 交差完成（存档回放 silent=true 时直接到此）
+    _finishQuestItem(it, silent = false) {
+        if (it.mesh) { this.scene.remove(it.mesh); it.mesh.geometry?.dispose(); it.mesh.material?.dispose(); it.mesh = null; }
+        if (it.beam) { this.scene.remove(it.beam); it.beam.geometry.dispose(); it.beam.material.dispose(); it.beam = null; }
+        if (it.guard && it.guard.state !== 'ko') {       // 回放时把守卫直接撤掉
+            it.guard.state = 'ko';
+            if (it.guard.group) it.guard.group.visible = false;
+        }
+        it.stage = 'done';
+        it.collected = true;
         this.questCount++;
         this._updateQuestHud();
         if (!silent) {
-            // 收集反馈（加载存档时静默，不放烟花）
-            this._tone(880, 0.10, 'sine', 0.07);
-            this._tone(1320, 0.12, 'sine', 0.06, 0.06);
+            this._tone(880, 0.12, 'sine', 0.07);
+            this._tone(1320, 0.16, 'sine', 0.06, 0.06);
             this._launchFirework();
             this._showEasterBadge(it.story.replace(/<br>/g, ' '));
         }
         this._unlockAchievement && this._unlockAchievement('quest_' + it.key);
 
-        // —— 区域故事角色的反应（存档回放也要应用，否则进度对不上）——
+        // —— 伙伴 NPC 的反应（存档回放也要应用）——
         if (it.key === 'fireseed' && this._snowSpriteRec) {
             if (this._snowSpriteBody) {
                 this._snowSpriteBody.material.color.setHex(0xffd9ec);
@@ -2054,15 +2153,21 @@ export class Game3D {
             if (this._snowSpriteMouth) this._snowSpriteMouth.rotation.z = Math.PI;
             this._setStoryLine(this._snowSpriteRec, '谢谢你，小蛋！暖和多啦～(*^▽^*)');
         }
-        if (it.key === 'springpearl') this._reviveOasis();
+        if (it.key === 'springpearl') {
+            this._reviveOasis();
+            if (this._travelerRec) this._setStoryLine(this._travelerRec, '哇，清泉之珠！绿洲活过来啦，太谢谢你了！');
+        }
         if (it.key === 'moonstone' && this._turtleRec) {
             this._setStoryLine(this._turtleRec, '谢谢你，小蛋。夜里它会照亮回家的路～');
+        }
+        if (it.key === 'starleaf' && this._spiritRec) {
+            this._setStoryLine(this._spiritRec, '星光草回来啦！森林又会发光了，谢谢你～');
         }
 
         if (this.questCount >= this.questItems.length) {
             this._questReady = true;
             if (!silent) setTimeout(() => {
-                if (!this._questDone) this._showEasterBadge('✨ 三样心愿之物都齐了！快回村庄钟楼！');
+                if (!this._questDone) this._showEasterBadge('✨ 四样心愿之物都集齐了！快回村庄钟楼，走到钟下敲响它！');
             }, 2400);
         }
         if (!silent) this._saveProgress();
@@ -2070,12 +2175,37 @@ export class Game3D {
 
     _updateQuestHud() {
         if (!this._questChip) return;
-        const mark = (k) => {
-            const it = this.questItems.find(i => i.key === k);
-            return it ? `${it.emoji}${it.collected ? '✅' : '·'}` : '';
-        };
-        this._questChip.innerHTML =
-            `心愿之物　${mark('fireseed')}　${mark('springpearl')}　${mark('moonstone')}　${this.questCount}/${this.questItems.length}`;
+        const marks = this.questItems.map(it =>
+            `${it.emoji}${it.stage === 'done' ? '✅' : (it.stage === 'carrying' ? '🎒' : '·')}`
+        ).join('　');
+        this._questChip.innerHTML = `心愿之物　${marks}　${this.questCount}/${this.questItems.length}`;
+    }
+
+    // 左上当前目标条：按所在区域 + 任务阶段给一句明确的"现在该干嘛"
+    _updateObjective() {
+        if (!this._objChip) return;
+        let txt;
+        if (this._questDone) {
+            txt = '🎉 钟楼亮啦！自由探索这个大世界吧～';
+        } else if (this._questReady) {
+            txt = '🔔 四样都齐了！回村庄中央的钟楼，走到钟下敲响它！';
+        } else {
+            const carrying = this.questItems.find(it => it.stage === 'carrying');
+            const region = this._regionAt(this.player.position.x, this.player.position.z);
+            const here = this.questItems.find(it => it.region === region && it.stage !== 'done');
+            const focus = (here && here.stage === 'carrying') ? here : (carrying || here);
+            if (focus && focus.stage === 'sealed')        txt = `🎯 ${focus.label}：打败看守它的守卫怪，才能拿到！`;
+            else if (focus && focus.stage === 'revealed') txt = `✨ 守卫倒了！走过去拿起 ${focus.emoji} ${focus.label}`;
+            else if (focus && focus.stage === 'carrying') txt = `🎒 带着 ${focus.emoji} ${focus.label}，回去交给${focus.giverLabel}`;
+            else {
+                const left = this.questItems.filter(it => it.stage !== 'done').length;
+                txt = `🗺️ 还差 ${left} 样：去 雪原 / 沙漠 / 月光湖 / 萤火森林 找回心愿之物（${this.questCount}/${this.questItems.length}）`;
+            }
+        }
+        if (this._objChip._last !== txt) {
+            this._objChip._last = txt;
+            this._objChip.innerHTML = txt;
+        }
     }
 
     _lightBellTower(silent = false) {
@@ -2127,7 +2257,7 @@ export class Game3D {
                  text-shadow:0 3px 16px rgba(255,180,80,0.8);margin:8px 0">钟楼亮啦！</div>
             <div style="font-size:24px;color:#ffe6a0;margin-bottom:6px">你做到了，蛋蛋！🥚✨</div>
             <div style="font-size:17px;color:#cfc4e0;max-width:80vw;line-height:1.6;margin-bottom:26px">
-                你把火种、清泉之珠、月光石都带回了村庄，<br>钟声又响起来了，大家都笑了 🎉</div>
+                你打败了四个守卫，把火种、清泉之珠、月光石、星光草<br>都带回了村庄，钟声又响起来了，大家都笑了 🎉</div>
             <button id="win-continue" style="font-size:20px;font-weight:bold;color:#fff;
                  padding:12px 32px;border:none;border-radius:999px;cursor:pointer;
                  background:linear-gradient(90deg,#ff9ec4,#ffd24a);box-shadow:0 6px 20px rgba(0,0,0,0.3)">
@@ -5778,6 +5908,8 @@ export class Game3D {
         this._launchFirework();
         this._tone(1320, 0.2, 'sine', 0.07);
         this._unlockAchievement('first_ko');
+        // 守卫怪被打倒 → 解锁它守着的心愿之物
+        if (m.guardItem) m.guardItem._guardDown = true;
         // 掉落奖励（咬人箱怪打倒给宝石，回报冒险风险）
         if (m.drop > 0) {
             this.carriedValue = Math.max(0, this.carriedValue + m.drop);
@@ -7572,10 +7704,10 @@ export class Game3D {
         group.add(flake);
         this._snowSpriteFlake = flake;
 
-        group.position.set(-30, 0, -90);
+        group.position.set(-26, 0, -74);
         this.scene.add(group);
         this._snowSpriteRec = this._attachStoryNpc(
-            group, '小雪精灵', '呜…我把暖灯火种冻在冰里了，好冷好孤单…', 2.5, 3.4
+            group, '小雪精灵', '呜…暖灯火种被雪原最深处的守卫怪抢走了。打败它、把火种带回来给我好吗？', 2.5, 3.4
         );
     }
 
@@ -7621,7 +7753,115 @@ export class Game3D {
         group.position.set(40, 0, -33);
         this.scene.add(group);
         this._turtleRec = this._attachStoryNpc(
-            group, '老乌龟', '我的月光石就在那边发亮…帮我把它收好，好吗？', 1.6, 2.4
+            group, '老乌龟', '月光石被守卫怪护在湖那头…帮我抢回来、带回来交给我好吗？', 1.6, 2.4
+        );
+    }
+
+    // 沙漠绿洲·沙漠旅人（渴坏了，求人取回清泉之珠）——在干涸绿洲旁
+    _buildDesertTraveler() {
+        const group = new THREE.Group();
+        const body = new THREE.Mesh(
+            new THREE.SphereGeometry(0.55, 18, 14),
+            new STD_MAT({ color: 0xe9c98a, emissive: 0x000000 })
+        );
+        body.scale.set(1, 1.18, 1);
+        body.position.y = 0.7;
+        body.castShadow = true;
+        addOutline(body, 0.03);
+        group.add(body);
+        // 头巾（防晒布）
+        const cloth = new THREE.Mesh(
+            new THREE.SphereGeometry(0.5, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+            new THREE.MeshToonMaterial({ color: 0xd95a4a })
+        );
+        cloth.position.y = 1.18; cloth.scale.set(1.1, 0.8, 1.1);
+        group.add(cloth);
+        const drape = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.06), new THREE.MeshToonMaterial({ color: 0xd95a4a }));
+        drape.position.set(0, 1.0, 0.42);
+        group.add(drape);
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0x222222 }));
+            eye.position.set(sx * 0.16, 0.86, -0.45);
+            group.add(eye);
+        }
+        // 空水壶
+        const gourd = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 8), new THREE.MeshToonMaterial({ color: 0x8a5a2e }));
+        gourd.position.set(0.5, 0.55, 0.1); gourd.scale.y = 1.3;
+        group.add(gourd);
+        group.position.set(-30, 0, 114);
+        this.scene.add(group);
+        this._travelerRec = this._attachStoryNpc(
+            group, '沙漠旅人', '渴死了…清泉之珠在沙漠最深处，被守卫怪看着。帮我抢回来，绿洲就能复活！', 2.0, 2.9
+        );
+    }
+
+    // 萤火森林·森林精灵（守着精灵树，求取回星光草）——在精灵树下
+    _buildForestSpirit() {
+        const group = new THREE.Group();
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: makeSnowflakeTexture(), color: 0x9bff8c, transparent: true, opacity: 0.5,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        halo.scale.set(2.6, 2.6, 1); halo.position.y = 1.3;
+        group.add(halo);
+        const body = new THREE.Mesh(
+            new THREE.SphereGeometry(0.6, 20, 16),
+            new STD_MAT({ color: 0xbff0c4, emissive: 0x66e0a0, emissiveIntensity: 1.1, transparent: true, opacity: 0.92 })
+        );
+        body.position.y = 1.3;
+        group.add(body);
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: 0x224433 }));
+            eye.position.set(sx * 0.16, 1.42, -0.42);
+            group.add(eye);
+        }
+        // 两片小叶子当翅膀
+        for (const sx of [-1, 1]) {
+            const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshToonMaterial({ color: 0x7be08a }));
+            leaf.position.set(sx * 0.55, 1.35, 0.1); leaf.scale.set(0.5, 1, 0.2);
+            group.add(leaf);
+        }
+        group.position.set(-118, 0, 4);
+        this.scene.add(group);
+        this._spiritRec = this._attachStoryNpc(
+            group, '森林精灵', '森林的星光草被深处的守卫夺走了…没有它，森林会慢慢暗下去。帮帮我？', 2.4, 3.3
+        );
+    }
+
+    // 村庄·蛋爷爷（开场交代心愿之物 + 钟楼）——在广场旁
+    _buildElder() {
+        const group = new THREE.Group();
+        const body = new THREE.Mesh(
+            new THREE.SphereGeometry(0.6, 18, 14),
+            new STD_MAT({ color: 0xf3e2c0, emissive: 0x000000 })
+        );
+        body.scale.set(1, 1.25, 1); body.position.y = 0.75;
+        body.castShadow = true; addOutline(body, 0.03);
+        group.add(body);
+        // 尖顶巫师帽
+        const hat = new THREE.Mesh(new THREE.ConeGeometry(0.5, 0.9, 14), new THREE.MeshToonMaterial({ color: 0x5b6cc4 }));
+        hat.position.y = 1.7; addOutline(hat, 0.04);
+        group.add(hat);
+        const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.08, 16), new THREE.MeshToonMaterial({ color: 0x4a5ab0 }));
+        brim.position.y = 1.3;
+        group.add(brim);
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshBasicMaterial({ color: 0x222222 }));
+            eye.position.set(sx * 0.16, 0.95, -0.48);
+            group.add(eye);
+        }
+        // 白胡子
+        const beard = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.5, 12), new THREE.MeshToonMaterial({ color: 0xf5f5f5 }));
+        beard.position.set(0, 0.55, -0.42); beard.rotation.x = Math.PI;
+        group.add(beard);
+        // 拐杖
+        const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.5, 8), new THREE.MeshToonMaterial({ color: 0x8a5a2e }));
+        staff.position.set(0.6, 0.75, 0.1);
+        group.add(staff);
+        group.position.set(4, 0, 3);
+        this.scene.add(group);
+        this._elderRec = this._attachStoryNpc(
+            group, '蛋爷爷', '村庄的钟楼灭了。去雪原·沙漠·月光湖·萤火森林，打败守卫、把 4 样心愿之物带回来交给伙伴，再回钟楼敲响它，就能重新点亮！', 2.3, 3.2
         );
     }
 
