@@ -4281,61 +4281,107 @@ export class Game3D {
     _initSwimming() {
         this.swimming = false;
         this.lakeCenter = { x: 48, z: -42 };
-        this.lakeRadius = 7.5;
+        this.lakeRadius = 7.8;
         this.icePondCenter = { x: -30, z: -90 };
         this.icePondRadius = 7;
     }
 
     _checkSwimming(dt) {
         const p = this.player.position;
-        const dx = p.x - this.lakeCenter.x;
-        const dz = p.z - this.lakeCenter.z;
-        const distLake = Math.hypot(dx, dz);
-        const inLake = distLake < this.lakeRadius;
+        const inLake = this._overLake();
 
-        if (inLake && !this.swimming && this.player.position.y < 1.0) {
-            // 落水瞬间：溅水花
+        if (inLake && !this.swimming && p.y < 1.2) {
+            // 扑通下水：大水花 + 水圈 + 提示
             this.swimming = true;
-            this._splashWater(p.x, p.z);
-            this._tone(440, 0.15, 'sine', 0.06);
+            this._splashWater(p.x, p.z, 16);
+            this._spawnWaterRipple(p.x, p.z);
+            this._tone(360, 0.18, 'sine', 0.09);
+            this._tone(200, 0.26, 'sine', 0.06, 0.05);
             this._unlockAchievement('first_swim');
+            this._showEasterBadge('💦 扑通！下水啦～');
         }
         if (!inLake && this.swimming) {
+            // 上岸：再溅一下 + 收起水圈 + 恢复体色
             this.swimming = false;
-            // 上岸恢复颜色：下雨天恢复成雨天湿色，否则干色（别把雨天湿色覆盖丢了）
+            this._splashWater(p.x, p.z, 10);
+            this._tone(300, 0.14, 'sine', 0.06);
             if (this.bodyMesh) {
                 const raining = this.weather === 'rain';
                 this.bodyMesh.material.color.setHex(raining ? this._bodyColorWet : this._bodyColorDry);
             }
+            if (this._swimRing) this._swimRing.visible = false;
         }
 
         if (this.swimming) {
-            // 浮力：被水推上来 + 减弱重力
-            const surface = 0.5;
-            if (this.player.position.y < surface) {
-                this.playerVy += 12 * dt;
+            const t = performance.now() * 0.001;
+            // 强水阻：水里移动明显变慢变沉
+            this.velocity.x *= 0.85;
+            this.velocity.z *= 0.85;
+            // 齐腰泡在水里轻轻上下晃（落地高度已被压到 -0.2，这里叠个浮动）
+            if (this.onGround) {
+                this.player.position.y = -0.2 + Math.sin(t * 2.2) * 0.07;
+                this.playerVy = 0;
             }
-            this.playerVy *= 0.85;  // 水阻
-            this.velocity.x *= 0.92;
-            this.velocity.z *= 0.92;
-            // 让蛋停在水面附近上下浮
-            if (this.player.position.y < 0.2) this.player.position.y = 0.2;
-            // 蓝调
-            if (this.bodyMesh) {
-                this.bodyMesh.material.color.setHex(darkenHex(this._bodyColorDry, 0.65));
+            // 身体压暗成水色
+            if (this.bodyMesh) this.bodyMesh.material.color.setHex(darkenHex(this._bodyColorDry, 0.6));
+            // 跟随水圈
+            this._updateSwimRing(p.x, p.z, t);
+            // 移动时不断拖出波纹 + 水花
+            const moving = Math.hypot(this.velocity.x, this.velocity.z) > 1.0;
+            this._wakeT = (this._wakeT || 0) - dt;
+            if (this._wakeT <= 0) {
+                this._wakeT = moving ? 0.18 : 0.55;
+                this._spawnWaterRipple(p.x, p.z);
+                if (moving) { this._splashWater(p.x, p.z, 4); this._tone(520, 0.06, 'sine', 0.03); }
             }
         }
     }
 
-    _splashWater(x, z) {
-        for (let i = 0; i < 12; i++) {
+    // 跟随玩家的水面圈（一眼看出"我泡在水里"）
+    _updateSwimRing(x, z, t) {
+        if (!this._swimRing) {
+            const ring = new THREE.Mesh(
+                new THREE.RingGeometry(0.42, 0.6, 28),
+                new THREE.MeshBasicMaterial({
+                    color: 0xcdefff, transparent: true, opacity: 0.6,
+                    side: THREE.DoubleSide, depthWrite: false, fog: false,
+                })
+            );
+            ring.rotation.x = -Math.PI / 2;
+            this.scene.add(ring);
+            this._swimRing = ring;
+        }
+        this._swimRing.visible = true;
+        this._swimRing.position.set(x, 0.16, z);
+        const s = 1 + Math.sin(t * 4) * 0.14;
+        this._swimRing.scale.set(s, s, 1);
+        this._swimRing.material.opacity = 0.45 + Math.sin(t * 4) * 0.12;
+    }
+
+    // 扩散水波纹（复用 ripples 自动扩散淡出）
+    _spawnWaterRipple(x, z) {
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.24, 0.34, 24),
+            new THREE.MeshBasicMaterial({
+                color: 0xeafcff, transparent: true, opacity: 0.8,
+                side: THREE.DoubleSide, depthWrite: false, fog: false,
+            })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(x, 0.13, z);
+        this.scene.add(ring);
+        (this.ripples = this.ripples || []).push({ ring, life: 1.1, full: 1.1 });
+    }
+
+    _splashWater(x, z, count = 12) {
+        for (let i = 0; i < count; i++) {
             const drop = new THREE.Mesh(
                 new THREE.SphereGeometry(0.08 + Math.random() * 0.05, 6, 4),
                 new STD_MAT({
-                    color: 0x88c8e8, transparent: true, opacity: 0.85,
+                    color: 0x9fd6f2, transparent: true, opacity: 0.85,
                 })
             );
-            const ang = (i / 12) * Math.PI * 2;
+            const ang = (i / count) * Math.PI * 2;
             const sp = 2.5 + Math.random() * 1.5;
             drop.userData = {
                 vx: Math.cos(ang) * sp,
@@ -4344,7 +4390,7 @@ export class Game3D {
                 life: 1.0,
                 full: 1.0,
             };
-            drop.position.set(x, 0.5, z);
+            drop.position.set(x, 0.4, z);
             this.scene.add(drop);
             this.landParticles.push(drop);
         }
@@ -9601,12 +9647,21 @@ export class Game3D {
         this.playerVy -= GRAVITY * dt;
         this.player.position.y += this.playerVy * dt;
 
-        const groundY = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时落地高度同步，别陷地
+        let groundY = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时落地高度同步，别陷地
+        // 站在湖水上方时，"地面"降低 → 人物真正沉到水里（齐腰），不再像踩在水面上
+        if (this._overLake && this._overLake()) groundY = -0.2;
         if (this.player.position.y <= groundY) {
             this.player.position.y = groundY;
             this.playerVy = 0;
             this.onGround = true;
         }
+    }
+
+    // 玩家是否在湖水面上方（给落地高度和游泳判定共用）
+    _overLake() {
+        if (!this.lakeCenter) return false;
+        const p = this.player.position;
+        return Math.hypot(p.x - this.lakeCenter.x, p.z - this.lakeCenter.z) < (this.lakeRadius || 7.5);
     }
 
     _resolveObstacleCollisions() {
