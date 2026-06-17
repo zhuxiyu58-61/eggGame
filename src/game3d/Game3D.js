@@ -833,6 +833,7 @@ export class Game3D {
         this._sleepPhase = 0;
         this._sleepCooldown = 0;
         this._sleepJumped = false;
+        this.__t('scatterGroundPatches', () => this._scatterGroundPatches());
         this.__t('scatterDecorations', () => this._scatterDecorations());
         this.__t('scatterTrees', () => this._scatterTrees());
         this.__t('createWindGrass', () => this._createWindGrass());
@@ -8823,25 +8824,59 @@ export class Game3D {
 
     _addBush(x, z) {
         const group = new THREE.Group();
-        const colors = [0x6cb56c, 0x80c280, 0x589f58];
-        const colorHex = colors[Math.floor(Math.random() * 3)];
-        const mat = new THREE.MeshToonMaterial({ color: colorHex });
-        const count = 2 + Math.floor(Math.random() * 2);
+        const baseGreen = [0x5aa84f, 0x6cb56c, 0x589f58, 0x7cc25a, 0x4f9a4a][(Math.random() * 5) | 0];
+        const count = 3 + ((Math.random() * 3) | 0);
+        const leaves = [];
         for (let i = 0; i < count; i++) {
-            const r = 0.22 + Math.random() * 0.22;
-            const ball = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), mat);
-            ball.position.set(
-                (Math.random() - 0.5) * 0.5,
-                r * 0.75,
-                (Math.random() - 0.5) * 0.5
-            );
-            ball.castShadow = true;
-            ball.receiveShadow = true;
+            const r = 0.2 + Math.random() * 0.24;
+            const f = 0.82 + Math.random() * 0.34;   // 逐球深浅，不再死板一坨
+            const col = f < 1 ? darkenHex(baseGreen, f) : lightenHex(baseGreen, (f - 1) * 0.5);
+            const ball = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), new THREE.MeshToonMaterial({ color: col }));
+            ball.position.set((Math.random() - 0.5) * 0.6, r * (0.7 + Math.random() * 0.3), (Math.random() - 0.5) * 0.6);
+            ball.scale.y = 0.85 + Math.random() * 0.3;
+            ball.castShadow = true; ball.receiveShadow = true;
             addOutline(ball, 0.04);
             group.add(ball);
+            leaves.push(ball);
+        }
+        // 偶尔开几朵小花/结浆果，添点生气
+        if (Math.random() < 0.4) {
+            const berry = new THREE.MeshToonMaterial({ color: [0xff6f8f, 0xffd24a, 0xff5a6a, 0xffffff][(Math.random() * 4) | 0] });
+            for (let i = 0; i < 3; i++) {
+                const host = leaves[(Math.random() * leaves.length) | 0];
+                const dot = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), berry);
+                dot.position.set(host.position.x + (Math.random() - 0.5) * 0.3, host.position.y + 0.18, host.position.z + (Math.random() - 0.5) * 0.3);
+                group.add(dot);
+            }
         }
         group.position.set(x, 0, z);
+        group.rotation.y = Math.random() * Math.PI * 2;
+        group.scale.setScalar(0.8 + Math.random() * 0.6);
         this.scene.add(group);
+    }
+
+    // 草甸地表色斑：大块、扁平、半透的深浅草色，打破"一整块纯绿"的假平地
+    _scatterGroundPatches() {
+        const greens = [0x5fa552, 0x6fb85f, 0x4f9447, 0x79c267, 0x589f50];
+        for (let i = 0; i < 22; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const r = 16 + Math.random() * 130;
+            const x = Math.cos(ang) * r, z = Math.sin(ang) * r;
+            if (z > 80 && Math.abs(x) < 104) continue;     // 沙漠不铺
+            if (z < -58 && Math.abs(x) < 104) continue;    // 雪原不铺
+            if (x < -66 && Math.abs(z) < 62) continue;     // 森林自有苔藓
+            if (Math.hypot(x - 48, z + 42) < 34) continue; // 湖
+            const patch = new THREE.Mesh(
+                new THREE.CircleGeometry(4 + Math.random() * 7, 18),
+                new THREE.MeshToonMaterial({ color: greens[(Math.random() * greens.length) | 0], transparent: true, opacity: 0.35 })
+            );
+            patch.rotation.x = -Math.PI / 2;
+            patch.rotation.z = Math.random() * Math.PI;
+            patch.scale.set(1, 0.6 + Math.random() * 0.7, 1);
+            patch.position.set(x, 0.018 + Math.random() * 0.006, z);
+            patch.receiveShadow = true;
+            this.scene.add(patch);
+        }
     }
 
     _createButterflies() {
