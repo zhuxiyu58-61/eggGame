@@ -4703,6 +4703,7 @@ export class Game3D {
         this._extractMounted = false;        // 是否已骑上大鸟（起飞中）
         this.extractOpenDur = 40;            // 大鸟停留 40 秒
         this.extractWinGoal = 80000;         // 宝库存满即"富翁蛋"通关
+        this.extractMinCarry = 10000;        // 身上至少搜刮到这么多钱,阵门才会开(空手/不够不让走)
         this._extractCount = parseInt(localStorage.getItem('eggExtractCount') || '0', 10);
         this._extractChip = document.getElementById('game-extract');
     }
@@ -4716,7 +4717,12 @@ export class Game3D {
                 this.extractPhaseTimer = this.extractOpenDur;
                 this._playExtractOpen();
                 this._startBirdArrive();
-                this._showEasterBadge('🦅 大鸟飞来啦！走到它身边骑上去，一起飞回家～');
+                if (this.carriedValue >= this.extractMinCarry) {
+                    this._showEasterBadge('🦅 大鸟飞来啦！走到它身边骑上去，一起飞回家～');
+                } else {
+                    const need = (this.extractMinCarry - this.carriedValue).toLocaleString();
+                    this._showEasterBadge(`🦅 大鸟来了！但你身上钱不够，还差 💰 ${need} 阵门才开，快去搜刮宝箱！`);
+                }
             } else {
                 // 窗口超时没撤 → 大鸟空手飞走，讲清楚"失败"了
                 this.extractPhase = 'closed';
@@ -4754,9 +4760,10 @@ export class Game3D {
                 o.material.emissiveIntensity = 0.3;
             });
         }
-        // 栅栏：没开门时围住，大鸟到了落进地里开门
+        // 栅栏：大鸟到了 + 身上钱搜够(>=门槛)才落门；钱不够时即便大鸟在也围住，逼着先搜刮
+        const richEnough = this.carriedValue >= this.extractMinCarry;
         if (this.extractFence) {
-            const fy = (isOpen || this._extractMounted) ? -1.9 : 0;
+            const fy = (this._extractMounted || (isOpen && richEnough)) ? -1.9 : 0;
             this.extractFence.position.y = approach(this.extractFence.position.y, fy, dt * 3.2);
             if (this._fenceBarrier) {
                 const open = this.extractFence.position.y < -0.4;
@@ -4765,6 +4772,7 @@ export class Game3D {
         }
         // 走到落地的大鸟旁 + 周围无怪 → 弹出"骑上大鸟"按钮，骑上即带宝藏起飞
         this._extractMonsterBlocking = false;
+        this._extractNotEnough = false;
         this._canMount = false;
         if (isOpen && !this.dying && !this._extractMounted && this._birdState === 'landed') {
             const p = this.player.position;
@@ -4781,9 +4789,16 @@ export class Game3D {
                 }
             }
             this._extractMonsterBlocking = monsterBlocking;
-            this._canMount = inRange && !monsterBlocking;
-            if (inRange && monsterBlocking) {
-                const now = performance.now();
+            this._extractNotEnough = inRange && !richEnough;
+            this._canMount = inRange && !monsterBlocking && richEnough;
+            const now = performance.now();
+            if (inRange && !richEnough) {
+                if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
+                    this._lastExtractWarn = now;
+                    const need = (this.extractMinCarry - this.carriedValue).toLocaleString();
+                    this._showEasterBadge(`💰 钱不够，阵门打不开！还差 ${need}，先去搜刮宝箱`);
+                }
+            } else if (inRange && monsterBlocking) {
                 if (!this._lastExtractWarn || now - this._lastExtractWarn > 2200) {
                     this._lastExtractWarn = now;
                     this._showEasterBadge('⚠️ 有怪在大鸟旁！赶走才能骑上去');
@@ -4856,12 +4871,16 @@ export class Game3D {
     _renderExtractChip() {
         if (!this._extractChip) return;
         const goalTxt = `🏦 ${this.bankedTotal.toLocaleString()}/${this.extractWinGoal.toLocaleString()}`;
+        const need = Math.max(0, this.extractMinCarry - (this.carriedValue || 0));
         if (this._extractMounted) {
             this._extractChip.innerHTML = `🦅 起飞！带着宝藏飞回家～`;
             this._extractChip.style.background = 'linear-gradient(90deg, #b07cff, #ffd700)';
         } else if (this.extractPhase === 'closed') {
-            this._extractChip.innerHTML = `🦅 大鸟 <b>${Math.ceil(this.extractPhaseTimer)}s</b> 后到 · 阵门紧锁 · ${goalTxt}`;
+            this._extractChip.innerHTML = `🦅 大鸟 <b>${Math.ceil(this.extractPhaseTimer)}s</b> 后到 · 撤离需带 💰<b>${this.extractMinCarry.toLocaleString()}</b> · ${goalTxt}`;
             this._extractChip.style.background = 'rgba(0, 0, 0, 0.45)';
+        } else if (need > 0) {
+            this._extractChip.innerHTML = `🦅 大鸟在等！还差 💰<b>${need.toLocaleString()}</b> 阵门才开（停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
+            this._extractChip.style.background = 'linear-gradient(90deg, #ff9f43, #ffd700)';
         } else if (this._canMount) {
             this._extractChip.innerHTML = `🦅 走到大鸟旁，骑上去飞走！（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
             this._extractChip.style.background = 'linear-gradient(90deg, #b07cff, #ffd700)';
@@ -5754,9 +5773,125 @@ export class Game3D {
             this._showEasterBadge(`💎 打倒咬人箱！+${m.drop.toLocaleString()}`);
             this._tone(1000, 0.18, 'sine', 0.07, 0.1);
         }
+        // 掉红心：打怪是掉血的主要来源，顺手在怪倒下处留个回血点（满血就不掉，免得浪费）
+        if (this.playerHP < this.playerHPMax) {
+            // 大怪必掉，其它怪 40% 掉；最多同时存在 4 颗，免得满地红心
+            const willDrop = m.type === 'tank' || Math.random() < 0.4;
+            if (willDrop && (this._hearts ? this._hearts.length : 0) < 4) {
+                this._spawnHeart(m.group.position.x, m.group.position.z);
+            }
+        }
         // 临时怪（咬人箱怪）标记回收，不复活
         if (m.temporary) {
             (this._monsterReap = this._monsterReap || []).push(m);
+        }
+    }
+
+    // ========= 红心回血：世界里/打怪后出现飘动的 ❤️，走过去捡到回 1 颗心 =========
+    _spawnHeart(x, z) {
+        const cv = document.createElement('canvas');
+        cv.width = 128; cv.height = 128;
+        const ctx = cv.getContext('2d');
+        ctx.font = '104px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('❤️', 64, 70);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false, fog: false,
+        }));
+        sp.scale.set(0.85, 0.85, 1);
+        const baseY = 0.95;
+        sp.position.set(x, baseY, z);
+        this.scene.add(sp);
+        // 地面粉色光圈：一眼看出"这有个能捡的东西"
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.38, 0.6, 28),
+            new THREE.MeshBasicMaterial({
+                color: 0xff5b7a, transparent: true, opacity: 0.55,
+                side: THREE.DoubleSide, depthWrite: false, fog: false,
+            })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(x, 0.06, z);
+        this.scene.add(ring);
+        (this._hearts = this._hearts || []).push({
+            mesh: sp, ring, baseY, t: Math.random() * 6, life: 30,
+        });
+        this._tone(740, 0.1, 'sine', 0.04);   // 出现轻轻叮一声
+    }
+
+    _updateHearts(dt) {
+        this._hearts = this._hearts || [];
+        // 怜悯刷新：真快没血了(≤2颗)又找不到红心时，在身边不远处放一颗，别让她卡死
+        this._heartMercyT = (this._heartMercyT == null ? 8 : this._heartMercyT) - dt;
+        if (this._heartMercyT <= 0) {
+            this._heartMercyT = 12 + Math.random() * 8;
+            if (this.playerHP <= 2 && this._hearts.length < 2 && !this.isInsideHouse
+                && !this.dying && !this.won && this.player) {
+                const a = Math.random() * Math.PI * 2;
+                const r = 3.5 + Math.random() * 2;
+                this._spawnHeart(
+                    this.player.position.x + Math.cos(a) * r,
+                    this.player.position.z + Math.sin(a) * r,
+                );
+            }
+        }
+        if (!this._hearts.length) return;
+        const p = this.player && this.player.position;
+        for (let i = this._hearts.length - 1; i >= 0; i--) {
+            const h = this._hearts[i];
+            h.t += dt;
+            h.life -= dt;
+            // 上下漂 + 轻轻转 + 临消失前闪烁提醒
+            h.mesh.position.y = h.baseY + Math.sin(h.t * 2.5) * 0.18;
+            h.mesh.material.rotation = Math.sin(h.t * 1.3) * 0.25;
+            const blink = h.life < 4 ? (0.4 + 0.6 * Math.abs(Math.sin(h.t * 6))) : 1;
+            h.mesh.material.opacity = blink;
+            h.ring.material.opacity = 0.55 * blink * (0.7 + 0.3 * Math.sin(h.t * 3));
+            // 拾取：走近 1.3m 即捡到
+            if (p && !this.dying && !this._extractMounted) {
+                const d = Math.hypot(p.x - h.mesh.position.x, p.z - h.mesh.position.z);
+                if (d < 1.3) {
+                    this._collectHeart(h);
+                    this._hearts.splice(i, 1);
+                    continue;
+                }
+            }
+            if (h.life <= 0) {
+                this._disposeHeart(h);
+                this._hearts.splice(i, 1);
+            }
+        }
+    }
+
+    _disposeHeart(h) {
+        this.scene.remove(h.mesh);
+        if (h.mesh.material.map) h.mesh.material.map.dispose();
+        h.mesh.material.dispose();
+        this.scene.remove(h.ring);
+        h.ring.geometry.dispose();
+        h.ring.material.dispose();
+    }
+
+    _collectHeart(h) {
+        this._disposeHeart(h);
+        if (this.playerHP < this.playerHPMax) {
+            this.playerHP = Math.min(this.playerHPMax, this.playerHP + 1);
+            this._renderPlayerHP();
+            this._showEasterBadge('❤️ +1 生命');
+            this._hpBarFlash = 0.4;                 // 头顶血条放大闪一下
+            if (this._hpChip) {
+                this._hpChip.animate(
+                    [{ transform: 'scale(1.5)', filter: 'brightness(1.6)' }, { transform: 'scale(1)', filter: 'brightness(1)' }],
+                    { duration: 420, easing: 'ease-out' }
+                );
+            }
+            this._tone(660, 0.12, 'sine', 0.07);
+            this._tone(990, 0.18, 'sine', 0.06, 0.08);
+        } else {
+            this._showEasterBadge('❤️ 已经满血啦');
+            this._tone(880, 0.12, 'sine', 0.05);
         }
     }
 
@@ -8862,6 +8997,7 @@ export class Game3D {
             this._updateChests(dt);
             this._updateMonsters(dt);
         }
+        this._updateHearts(dt);
         if (this._wateringCooldown > 0) this._wateringCooldown -= dt;
         if (!this.dying && !this.won) {
             this._checkHiddenFox();
