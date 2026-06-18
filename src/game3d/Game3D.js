@@ -787,10 +787,18 @@ export class Game3D {
         const grassTex = makeGrassTexture();
         grassTex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
         grassTex.repeat.set(32, 32);
-        const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(480, 480),
-            new THREE.MeshToonMaterial({ map: grassTex })
-        );
+        const groundGeo = new THREE.PlaneGeometry(480, 480, 180, 180);
+        // 让草甸环起伏：按高度函数顶点位移（村庄/路/各区核心 mask=0 保持平整）
+        {
+            const pos = groundGeo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                const lx = pos.getX(i), ly = pos.getY(i);
+                pos.setZ(i, this._terrainH(lx, -ly));   // 旋转 -90°后 local z → world y
+            }
+            pos.needsUpdate = true;
+            groundGeo.computeVertexNormals();
+        }
+        const ground = new THREE.Mesh(groundGeo, new THREE.MeshToonMaterial({ map: grassTex }));
         ground.rotation.x = -Math.PI / 2;
         ground.receiveShadow = true;
         this.scene.add(ground);
@@ -1211,7 +1219,7 @@ export class Game3D {
         // ===== 屋外生活化装饰（每间按 idx 差异化）=====
         this._addHouseLife(group, W, H, D, doorW, doorH, idx);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
 
         // ===== 碰撞：6 段薄墙 AABB（门洞留空让蛋走进去）=====
@@ -1751,7 +1759,7 @@ export class Game3D {
             eye.position.set(sx * 0.06, 0.36, -0.34);
             group.add(eye);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
         this.bunnies.push({
@@ -1777,7 +1785,7 @@ export class Game3D {
             if (b.hopPhase !== undefined && b.hopPhase < 1) {
                 b.hopPhase += dt * 3.5;
                 const y = Math.sin(b.hopPhase * Math.PI) * 0.18;
-                b.group.position.y = y;
+                b.group.position.y = y + this._terrainH(b.group.position.x, b.group.position.z);
                 // 平移
                 if (b.hopPhase < 1) {
                     b.group.position.x += Math.sin(b.heading) * 0.5 * dt;
@@ -1785,7 +1793,7 @@ export class Game3D {
                 }
                 b.group.rotation.y = b.heading;
             } else {
-                b.group.position.y = 0;
+                b.group.position.y = this._terrainH(b.group.position.x, b.group.position.z);
             }
             // 别跑太远
             const dx = b.group.position.x - b.home.x;
@@ -1910,7 +1918,7 @@ export class Game3D {
         lamp.position.set(0.36, 2.18, 0);
         group.add(lamp);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = ry;
         this.scene.add(group);
         this.lampposts.push({ bulb, lamp });
@@ -2443,7 +2451,7 @@ export class Game3D {
             );
             group.add(spot);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         group.scale.setScalar(0.8 + Math.random() * 0.6);
         this.scene.add(group);
@@ -2605,7 +2613,7 @@ export class Game3D {
         hatBrim.position.y = 2.16;
         group.add(hatBrim);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.visible = false;  // 默认隐藏
         this.scene.add(group);
         this.snowmen.push(group);
@@ -2875,7 +2883,7 @@ export class Game3D {
         addOutline(roof, 0.04);
         group.add(roof);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
         this.bell = bell;
         this.bellGroup = group;
@@ -2992,7 +3000,7 @@ export class Game3D {
         tail.scale.set(0.8, 1.2, 0.6);
         group.add(tail);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
         this.chickens.push({
@@ -3258,7 +3266,7 @@ export class Game3D {
             addOutline(c, 0.05);
             group.add(c);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
     }
@@ -3636,7 +3644,7 @@ export class Game3D {
             group.add(pile);
         }
 
-        group.position.set(x, 0, z);   // 不旋转：墙体 AABB 是轴对齐的
+        group.position.set(x, this._terrainH(x, z), z);   // 不旋转：墙体 AABB 是轴对齐的
         this.scene.add(group);
 
         // 碰撞：6 段薄墙（门洞留空让人走进去）
@@ -3795,7 +3803,7 @@ export class Game3D {
             flower.scale.y = 0.6;
             group.add(flower);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI;
         this.scene.add(group);
         // 仙人掌算软障碍（蛋别穿过去）
@@ -4148,6 +4156,25 @@ export class Game3D {
             opacity: '0', transition: 'opacity 0.8s',
         });
         document.body.appendChild(this._tintEl);
+    }
+
+    // 地形高度：只有开阔草甸环隆起缓坡；村庄/路/四大区核心 mask→0 保持平整
+    _terrainH(x, z) {
+        const ss = (e0, e1, v) => { const t = Math.min(1, Math.max(0, (v - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+        const r = Math.hypot(x, z);
+        let m = ss(48, 66, r);                                   // 村庄+三条路 平整
+        if (Math.abs(x) < 114) { m *= ss(-68, -50, z); m *= ss(86, 68, z); }  // 雪原/沙漠 band 压平
+        m *= ss(-72, -54, x);                                    // 西侧森林压平
+        const dl = Math.hypot(x - 48, z + 42); m *= ss(30, 44, dl);           // 月光湖压平
+        const di = Math.hypot(x + 30, z + 90); m *= ss(13, 22, di);           // 冰湖压平
+        // 樱花谷 box 压平
+        const obx = Math.max(80 - x, x - 166, 0), obz = Math.max(-26 - z, z - 70, 0);
+        m *= ss(0, 16, Math.hypot(obx, obz));
+        if (m < 0.001) return 0;
+        const hills = 1.0 * Math.sin(x * 0.045 + 1.3) * Math.cos(z * 0.041 + 0.7)
+            + 0.5 * Math.sin(x * 0.085 + z * 0.06 + 2.1)
+            + 0.35 * Math.cos(z * 0.10 - x * 0.032);
+        return m * hills * 0.82;                                 // 振幅约 ±1.5
     }
 
     _regionAt(x, z) {
@@ -4522,7 +4549,7 @@ export class Game3D {
             }
             y += h * 0.8;
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         group.scale.setScalar(0.8 + Math.random() * 0.6);
         this.scene.add(group);
@@ -5174,7 +5201,7 @@ export class Game3D {
         sign.position.set(0, 3.0, 0);
         group.add(sign);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
         this.extractRing = ring;
         this.extractBeam = beam;
@@ -5743,7 +5770,7 @@ export class Game3D {
         innerLight.position.set(0, 0.35, 0);
         group.add(innerLight);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
         const c = {
@@ -6237,7 +6264,7 @@ export class Game3D {
         hpSprite.position.y = r * 2.5 + 0.3;
         group.add(hpSprite);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
         const m = {
             group, body, hpSprite, hpCv, hpTex, type,
@@ -7838,7 +7865,7 @@ export class Game3D {
             addOutline(leg, 0.03);
             group.add(leg);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = ry;
         this.scene.add(group);
     }
@@ -8006,7 +8033,7 @@ export class Game3D {
         rug.position.set(0, 0.07, 0);
         group.add(rug);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
 
         // 6 段墙碰撞
@@ -8077,7 +8104,7 @@ export class Game3D {
         center.position.copy(hub.position);
         group.add(center);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
         this.animDecor.push({ type: 'windmill', hub });
 
@@ -8138,7 +8165,7 @@ export class Game3D {
         swingPivot.add(seat);
 
         group.add(swingPivot);
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI;
         this.scene.add(group);
         this.animDecor.push({
@@ -8349,7 +8376,7 @@ export class Game3D {
             group.add(bubble);
         }
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
         this.npcs.push({ group, phase: Math.random() * Math.PI * 2, bubble });
@@ -8828,7 +8855,7 @@ export class Game3D {
             const z = (Math.random() - 0.5) * 150;
             if (inPath(x, z)) continue;
             if (z < -56) continue;  // 雪原里不长草（绿草叶从雪里穿出来很穿帮）
-            dummy.position.set(x, 0, z);
+            dummy.position.set(x, this._terrainH(x, z), z);
             dummy.rotation.y = Math.random() * Math.PI;
             dummy.scale.setScalar(0.7 + Math.random() * 0.7);
             dummy.updateMatrix();
@@ -9219,7 +9246,7 @@ export class Game3D {
             }
         }
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         const s = 0.85 + Math.random() * 0.55;
         group.scale.setScalar(s);
@@ -9252,7 +9279,7 @@ export class Game3D {
             cone.castShadow = true; addOutline(cone, 0.04); group.add(cone);
             y += h * 0.62;
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         const s = 0.9 + Math.random() * 0.7;
         group.scale.setScalar(s);
@@ -9390,7 +9417,7 @@ export class Game3D {
                 group.add(moss);
             }
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
     }
 
@@ -9421,7 +9448,7 @@ export class Game3D {
         core.position.y = 0.57;
         group.add(core);
 
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         this.scene.add(group);
         this.flowers.push({ group, x, z, cooldown: 0, animT: 1 });
@@ -9454,7 +9481,7 @@ export class Game3D {
                 group.add(dot);
             }
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.rotation.y = Math.random() * Math.PI * 2;
         group.scale.setScalar(0.8 + Math.random() * 0.6);
         this.scene.add(group);
@@ -9773,7 +9800,7 @@ export class Game3D {
         const light = new THREE.PointLight(0xff7a2a, 1.6, 12, 2);
         light.position.set(0, 1.0, 0); g.add(light);
 
-        g.position.set(x, 0, z);
+        g.position.set(x, this._terrainH(x, z), z);
         this.scene.add(g);
         this._addPropCollider(x, z, 0.7, 1.0);
         this.campfires.push({ group: g, x, z, flames, light, ember, smokeT: Math.random(), lit: true });
@@ -10312,7 +10339,7 @@ export class Game3D {
         cap.position.y = h;
         cap.scale.y = 0.7;
         group.add(cap);
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         group.scale.setScalar(0.8 + Math.random() * 1.0);
         this.scene.add(group);
     }
@@ -10335,7 +10362,7 @@ export class Game3D {
             ball.position.set(c[0], c[1], c[2]);
             group.add(ball);
         }
-        group.position.set(x, 0, z);
+        group.position.set(x, this._terrainH(x, z), z);
         this.scene.add(group);
         this._spiritTree = group;
         // 树干登记碰撞
@@ -11056,6 +11083,8 @@ export class Game3D {
         this.player.position.y += this.playerVy * dt;
 
         let groundY = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时落地高度同步，别陷地
+        // 草甸环地形起伏：站立高度跟着抬
+        groundY += this._terrainH(this.player.position.x, this.player.position.z);
         // 站在湖水上方时，"地面"降低 → 人物真正沉到水里（齐腰），不再像踩在水面上
         if (this._overLake && this._overLake()) groundY = -0.2;
         if (this.player.position.y <= groundY) {
