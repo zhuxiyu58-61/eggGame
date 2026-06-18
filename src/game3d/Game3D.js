@@ -424,6 +424,7 @@ export class Game3D {
         this.playerVy = 0;
         this.onGround = true;
         this.obstacles = [];
+        this.mountains = [];        // 可踩半山坡：{cx,cz,rBase,h,cap}（远景峰，外圈坡能爬到 cap 高度）
         this.spikes = [];
         this.goals = [];
 
@@ -4286,6 +4287,19 @@ export class Game3D {
             + 0.5 * Math.sin(x * 0.085 + z * 0.06 + 2.1)
             + 0.35 * Math.cos(z * 0.10 - x * 0.032);
         return m * hills * 0.82;                                 // 振幅约 ±1.5
+    }
+
+    // 远景山的可踩坡高度：外圈坡随距山心变近而升高，封顶在 cap（再往里是挡峰柱，进不去）
+    _mountainSlopeH(x, z) {
+        if (x * x + z * z < 150 * 150) return 0;   // 山在半径~200 的环上，中心区直接跳过
+        let best = 0;
+        for (const m of this.mountains) {
+            const d = Math.hypot(x - m.cx, z - m.cz);
+            if (d >= m.rBase) continue;
+            const surf = Math.min(m.cap, m.h * (1 - d / m.rBase));   // 贴合锥面，封顶 cap
+            if (surf > best) best = surf;
+        }
+        return best;
     }
 
     _regionAt(x, z) {
@@ -10373,6 +10387,11 @@ export class Game3D {
     _addPeakMountain(cx, cz, size, baseColor, topColor, snowCap) {
         const h = size * (1.5 + Math.random() * 0.55);
         const rBase = size * (0.82 + Math.random() * 0.22);
+        // 半山可踩：外圈 [rCap, rBase] 是能踩的坡，踩到 cap 高度（约 45%）就被陡峰柱挡住
+        const CLIMB_FRAC = 0.45;
+        const climbCap = h * CLIMB_FRAC;
+        const rCap = rBase * (1 - CLIMB_FRAC);   // 坡面升到 cap 高度处的水平半径
+        this.mountains.push({ cx, cz, rBase, h, cap: climbCap });
         const yBase = -size * 0.18;                 // 山脚陷进地里，藏掉锥底硬边
         const grp = new THREE.Group();
         const white = new THREE.Color(0xf4f9ff);
@@ -10465,10 +10484,11 @@ export class Game3D {
 
         grp.position.set(cx, 0, cz);
         this.scene.add(grp);
-        const r = rBase * 1.0;   // 碰撞贴合主峰底盘
+        // 挡峰柱：只罩住陡峭的上半峰（从地面 y=0 起的实心柱，半径 rCap）。
+        // 玩家沿外圈坡爬到 cap 高度时撞上柱子「侧面」被横向挡回，进不了柱内、不会被顶上峰顶。
         this.obstacles.push({
-            min: new THREE.Vector3(cx - r, 0, cz - r),
-            max: new THREE.Vector3(cx + r, h * 0.8, cz + r),
+            min: new THREE.Vector3(cx - rCap, 0, cz - rCap),
+            max: new THREE.Vector3(cx + rCap, h * 0.8, cz + rCap),
         });
     }
 
@@ -11403,6 +11423,8 @@ export class Game3D {
         let groundY = PLAYER_RADIUS * (this.player.scale.x || 1);  // 巨化时落地高度同步，别陷地
         // 草甸环地形起伏：站立高度跟着抬
         groundY += this._terrainH(this.player.position.x, this.player.position.z);
+        // 远景山外圈坡：走到山脚能踩着坡爬到半山
+        groundY += this._mountainSlopeH(this.player.position.x, this.player.position.z);
         // 站在湖水上方时，"地面"降低 → 人物真正沉到水里（齐腰），不再像踩在水面上
         if (this._overLake && this._overLake()) groundY = -0.2;
         if (this.player.position.y <= groundY) {
