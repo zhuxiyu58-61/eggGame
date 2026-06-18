@@ -861,7 +861,7 @@ export class Game3D {
         });
 
         // 远景装饰：一圈小山
-        this.__t('addDistantHills', () => this._addDistantHills());
+        this.__t('addDistantHills', () => this._collectStatic(() => this._addDistantHills()));
 
         // 散落小石头/小花/灌木 + 卡通小树 + 蝴蝶 + 云 + 鸟群 + 星空 + 天气 + 草叶
         this.flowers = [];
@@ -4173,13 +4173,14 @@ export class Game3D {
         }
     }
 
-    // 只保留 position+normal 的非索引几何，统一属性以便合并
-    _cleanGeoForMerge(geo) {
+    // 非索引几何，统一属性以便合并；keepColor=true 时保留顶点色(给渐变色的山)
+    _cleanGeoForMerge(geo, keepColor) {
         const src = geo.index ? geo.toNonIndexed() : geo;
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', src.attributes.position.clone());
         if (src.attributes.normal) g.setAttribute('normal', src.attributes.normal.clone());
         else { g.computeVertexNormals(); }
+        if (keepColor && src.attributes.color) g.setAttribute('color', src.attributes.color.clone());
         if (src !== geo) src.dispose();
         return g;
     }
@@ -4196,19 +4197,22 @@ export class Game3D {
         for (const child of remove) {
             child.updateWorldMatrix(true, true);
             child.traverse(o => {
-                if (!o.isMesh || !o.material || !o.material.color) return;
-                srcMeshes++;
+                if (!o.isMesh || !o.material) return;
                 const m = o.material;
-                const qc = quant(m.color);
-                const key = `${m.type}|${qc}|s${m.side || 0}|t${m.transparent ? 1 : 0}|o${(m.opacity ?? 1).toFixed(2)}`;
+                const vtx = m.vertexColors === true;        // 渐变色山：按顶点色合并
+                if (!vtx && !m.color) return;
+                srcMeshes++;
+                const key = vtx
+                    ? `VTX|${m.type}|flat${m.flatShading ? 1 : 0}|s${m.side || 0}|t${m.transparent ? 1 : 0}`
+                    : `${m.type}|${quant(m.color)}|s${m.side || 0}|t${m.transparent ? 1 : 0}|o${(m.opacity ?? 1).toFixed(2)}`;
                 let bk = buckets.get(key);
                 if (!bk) {
                     const mat = m.clone();
-                    mat.color = new THREE.Color(Math.round(m.color.r * Q) / Q, Math.round(m.color.g * Q) / Q, Math.round(m.color.b * Q) / Q);
-                    bk = { mat, geos: [] };
+                    if (!vtx) mat.color = new THREE.Color(Math.round(m.color.r * Q) / Q, Math.round(m.color.g * Q) / Q, Math.round(m.color.b * Q) / Q);
+                    bk = { mat, geos: [], vtx };
                     buckets.set(key, bk);
                 }
-                const g = this._cleanGeoForMerge(o.geometry);
+                const g = this._cleanGeoForMerge(o.geometry, vtx);
                 g.applyMatrix4(o.matrixWorld);
                 bk.geos.push(g);
             });
