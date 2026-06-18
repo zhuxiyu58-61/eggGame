@@ -910,7 +910,7 @@ export class Game3D {
         this._addPlazaFlowers();
         this._buildCampfires();
         this._buildCollectibleStars();
-        this._scatterMushrooms();
+        this._collectStatic(() => this._scatterMushrooms());
         this._buildHotAirBalloon();
         this._buildSnowmen();
         // （旧的半径78圆形篱笆已移除：世界扩大后它卡在地图中间，只剩一对对横杠像散落的棍子；边界改由外圈山承担）
@@ -3890,7 +3890,7 @@ export class Game3D {
         for (let i = 0; i < 24; i++) {
             const x = CX + (Math.random() - 0.5) * 82, z = CZ + (Math.random() - 0.5) * 92;
             if (!inValley(x, z) || Math.hypot(x - CX, z - CZ) < 10) continue;
-            this._addCherryTree(x, z, 0.85 + Math.random() * 0.5);
+            this._collectStatic(() => this._addCherryTree(x, z, 0.85 + Math.random() * 0.5));
         }
         // 几丛密花
         for (let c = 0; c < 7; c++) {
@@ -4194,14 +4194,18 @@ export class Game3D {
             if (child.userData && child.userData.mergeStatic) remove.push(child);
         }
         let srcMeshes = 0;
+        const survivors = [];                            // 不可合的网格(带贴图等)原样保留
         for (const child of remove) {
             child.updateWorldMatrix(true, true);
-            child.traverse(o => {
-                if (!o.isMesh || !o.material) return;
+            const meshes = [];
+            child.traverse(o => { if (o.isMesh) meshes.push(o); });
+            for (const o of meshes) {
                 const m = o.material;
-                const vtx = m.vertexColors === true;        // 渐变色山：按顶点色合并
-                if (!vtx && !m.color) return;
+                const vtx = m && m.vertexColors === true;
+                // 带贴图/无颜色基准 → 不合并，保留
+                if (!m || m.map || (!vtx && !m.color)) { survivors.push(o); continue; }
                 srcMeshes++;
+                o.updateWorldMatrix(true, false);
                 const key = vtx
                     ? `VTX|${m.type}|flat${m.flatShading ? 1 : 0}|s${m.side || 0}|t${m.transparent ? 1 : 0}`
                     : `${m.type}|${quant(m.color)}|s${m.side || 0}|t${m.transparent ? 1 : 0}|o${(m.opacity ?? 1).toFixed(2)}`;
@@ -4215,8 +4219,10 @@ export class Game3D {
                 const g = this._cleanGeoForMerge(o.geometry, vtx);
                 g.applyMatrix4(o.matrixWorld);
                 bk.geos.push(g);
-            });
+            }
         }
+        // 保留的网格 reparent 到场景(保住世界变换)，再移除原 group
+        for (const o of survivors) this.scene.attach(o);
         for (const child of remove) this.scene.remove(child);
         let merged = 0;
         for (const { mat, geos } of buckets.values()) {
