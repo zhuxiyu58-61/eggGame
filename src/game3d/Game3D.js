@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadStyle, hexToInt } from './style';
 
 // 进入提速：全部用卡通材质，不用 PBR(MeshStandardMaterial)。PBR 着色器体积大，在集显上编译
@@ -874,7 +875,7 @@ export class Game3D {
         this._sleepJumped = false;
         this.__t('scatterGroundPatches', () => this._scatterGroundPatches());
         this.__t('scatterDecorations', () => this._scatterDecorations());
-        this.__t('scatterTrees', () => this._scatterTrees());
+        this.__t('scatterTrees', () => this._collectStatic(() => this._scatterTrees()));
         this.__t('createWindGrass', () => this._createWindGrass());
         this._createButterflies();
         this._createSkyClouds();
@@ -965,6 +966,8 @@ export class Game3D {
         this._initRegionFeel();
         // ===== 收集主线：火种/泉珠/月光石 → 点亮钟楼 =====
         this._initQuest();
+        // ===== 性能：把大量静态散物(树/松/石/灌木)按量化颜色合并成几个大网格 =====
+        this.__t('mergeStatic', () => { this._mergeStat = this._mergeStaticProps(); });
     }
 
     _buildHouses() {
@@ -4157,6 +4160,72 @@ export class Game3D {
             opacity: '0', transition: 'opacity 0.8s',
         });
         document.body.appendChild(this._tintEl);
+    }
+
+    // ===== 静态网格合并（性能：把大量静态散物按量化颜色合并成几个大网格，砍 draw call）=====
+    // 包一层：把 fn 期间新增到场景的顶层物件标记为可合并
+    _collectStatic(fn) {
+        const start = this.scene.children.length;
+        fn();
+        for (let i = start; i < this.scene.children.length; i++) {
+            const c = this.scene.children[i];
+            if (c) c.userData.mergeStatic = true;
+        }
+    }
+
+    // 只保留 position+normal 的非索引几何，统一属性以便合并
+    _cleanGeoForMerge(geo) {
+        const src = geo.index ? geo.toNonIndexed() : geo;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', src.attributes.position.clone());
+        if (src.attributes.normal) g.setAttribute('normal', src.attributes.normal.clone());
+        else { g.computeVertexNormals(); }
+        if (src !== geo) src.dispose();
+        return g;
+    }
+
+    _mergeStaticProps() {
+        const Q = 14;                                   // 颜色量化级数（越小桶越少越省，视觉差越大）
+        const quant = (c) => `${Math.round(c.r * Q)}-${Math.round(c.g * Q)}-${Math.round(c.b * Q)}`;
+        const buckets = new Map();
+        const remove = [];
+        for (const child of this.scene.children) {
+            if (child.userData && child.userData.mergeStatic) remove.push(child);
+        }
+        let srcMeshes = 0;
+        for (const child of remove) {
+            child.updateWorldMatrix(true, true);
+            child.traverse(o => {
+                if (!o.isMesh || !o.material || !o.material.color) return;
+                srcMeshes++;
+                const m = o.material;
+                const qc = quant(m.color);
+                const key = `${m.type}|${qc}|s${m.side || 0}|t${m.transparent ? 1 : 0}|o${(m.opacity ?? 1).toFixed(2)}`;
+                let bk = buckets.get(key);
+                if (!bk) {
+                    const mat = m.clone();
+                    mat.color = new THREE.Color(Math.round(m.color.r * Q) / Q, Math.round(m.color.g * Q) / Q, Math.round(m.color.b * Q) / Q);
+                    bk = { mat, geos: [] };
+                    buckets.set(key, bk);
+                }
+                const g = this._cleanGeoForMerge(o.geometry);
+                g.applyMatrix4(o.matrixWorld);
+                bk.geos.push(g);
+            });
+        }
+        for (const child of remove) this.scene.remove(child);
+        let merged = 0;
+        for (const { mat, geos } of buckets.values()) {
+            const mg = mergeGeometries(geos, false);
+            geos.forEach(g => g.dispose());
+            if (!mg) continue;
+            const mesh = new THREE.Mesh(mg, mat);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            mesh.frustumCulled = false;     // 是横跨全图的大网格，别被整体剔除
+            this.scene.add(mesh);
+            merged++;
+        }
+        return { srcMeshes, mergedMeshes: merged };
     }
 
     // 地形高度：只有开阔草甸环隆起缓坡；村庄/路/四大区核心 mask→0 保持平整
@@ -9383,10 +9452,10 @@ export class Game3D {
             if (z > 80 && Math.abs(x) < 104) continue;        // 沙漠不长花草
             if (x < -66 && Math.abs(z) < 62) continue;        // 森林自有植被
             const t = Math.random();
-            if (z < -56) { this._addStone(x, z); continue; }  // 雪原里只有石头，花/灌木不长
-            if (t < 0.4)       this._addStone(x, z);
-            else if (t < 0.75) this._addFlower(x, z);
-            else               this._addBush(x, z);
+            if (z < -56) { this._collectStatic(() => this._addStone(x, z)); continue; }  // 雪原里只有石头，花/灌木不长
+            if (t < 0.4)       this._collectStatic(() => this._addStone(x, z));
+            else if (t < 0.75) this._addFlower(x, z);                                    // 花可交互，不合并
+            else               this._collectStatic(() => this._addBush(x, z));
         }
     }
 
