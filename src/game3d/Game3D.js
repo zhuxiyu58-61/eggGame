@@ -5921,7 +5921,10 @@ export class Game3D {
             this.carriedValue = Math.max(0, this.carriedValue + loot.value);
             this._renderTreasureChip();
         }
-        if (loot.kind === 'weapon' || loot.kind === 'junk') {
+        if (loot.kind === 'weapon') {
+            this._addToInventory(loot.emoji);
+            this._equipWeapon(loot.name);
+        } else if (loot.kind === 'junk') {
             this._addToInventory(loot.emoji);
         }
 
@@ -6354,41 +6357,168 @@ export class Game3D {
         if (this._invincible > 0) this._invincible -= dt;
     }
 
+    // 当前武器的属性（没装备=拳头）
+    _weaponCfg() {
+        switch (this.equippedWeapon) {
+            case '木剑':   return { kind: 'melee',  dmg: 2, range: 2.7, knock: 1.9, label: '木剑' };
+            case '小弓':   return { kind: 'ranged', dmg: 1, speed: 30, proj: 'arrow', label: '小弓' };
+            case '魔法书': return { kind: 'ranged', dmg: 2, speed: 22, proj: 'magic', label: '魔法书' };
+            default:       return { kind: 'melee',  dmg: 1, range: 2.2, knock: 1.5, label: '拳头' };
+        }
+    }
+
+    // 命中一只怪（近战/弹道共用）
+    _hitMonster(m, dmg, knock, fromX, fromZ) {
+        const sx = fromX !== undefined ? fromX : this.player.position.x;
+        const sz = fromZ !== undefined ? fromZ : this.player.position.z;
+        const dx = m.group.position.x - sx, dz = m.group.position.z - sz;
+        const d = Math.hypot(dx, dz) || 1;
+        m.hp -= dmg; m.hitFlash = 0.35; this._drawMonsterHP(m);
+        m.group.position.x += dx / d * knock;
+        m.group.position.z += dz / d * knock;
+        m.attackCD = Math.max(m.attackCD, 0.5);
+        this._spawnHitNumber(m.group.position);
+        this._tone(900, 0.1, 'square', 0.07);
+        this._tone(1300, 0.08, 'square', 0.04, 0.04);
+        if (m.hp <= 0) this._koMonster(m);
+    }
+
     _doMeleeAttack() {
         if (this._attackCooldown > 0) return;
-        this._attackCooldown = 0.55;
-        this._spawnSwingFx();                       // 每次按 J 都有挥击弧光，能看见攻击发生
-        this._tone(680, 0.07, 'square', 0.05);
+        const w = this._weaponCfg();
+        this._attackCooldown = w.kind === 'ranged' ? 0.4 : 0.55;
+        if (w.kind === 'ranged') { this._fireProjectile(w); return; }
+
+        this._spawnSwingFx(w.dmg >= 2);             // 木剑挥得更大
+        this._tone(w.dmg >= 2 ? 600 : 680, 0.07, 'square', 0.05);
         const p = this.player.position;
         let hit = false;
         for (const m of this.monsters) {
             if (m.state !== 'alive') continue;
-            const dx = m.group.position.x - p.x;
-            const dz = m.group.position.z - p.z;
-            const d = Math.hypot(dx, dz);
-            if (d < 2.2) {                          // 范围 1.5→2.2，更容易够到
-                m.hp -= 1;
-                m.hitFlash = 0.35;
-                this._drawMonsterHP(m);
-                // 把怪打退（"驱赶"手感）+ 短暂不还手
-                const nx = dx / (d || 1), nz = dz / (d || 1);
-                m.group.position.x += nx * 1.5;
-                m.group.position.z += nz * 1.5;
-                m.attackCD = Math.max(m.attackCD, 0.5);
-                this._spawnHitNumber(m.group.position);
-                this._tone(900, 0.1, 'square', 0.07);
-                this._tone(1300, 0.08, 'square', 0.04, 0.04);
-                if (m.hp <= 0) this._koMonster(m);
-                hit = true;
-            }
+            const d = Math.hypot(m.group.position.x - p.x, m.group.position.z - p.z);
+            if (d < w.range) { this._hitMonster(m, w.dmg, w.knock); hit = true; }
         }
         if (!hit) this._tone(220, 0.07, 'sine', 0.03); // 空挥
     }
 
-    // 挥击弧光（按 J 即播，朝镜头前方）
-    _spawnSwingFx() {
+    // 发射弹道（弓=箭单体，魔法书=魔法弹穿透）
+    _fireProjectile(w) {
+        const yaw = this.cameraYaw || 0;
+        const fx = Math.sin(yaw), fz = -Math.cos(yaw);
+        const p = this.player.position;
+        let mesh;
+        if (w.proj === 'arrow') {
+            mesh = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.7, 6), new THREE.MeshToonMaterial({ color: 0x8a5a2e }));
+            addOutline(mesh, 0.02);
+            this._tone(520, 0.1, 'triangle', 0.05);
+        } else {
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff6fe0, transparent: true, opacity: 0.92, depthWrite: false }));
+            this._tone(780, 0.12, 'sine', 0.05); this._tone(1040, 0.12, 'sine', 0.04, 0.06);
+        }
+        mesh.position.set(p.x + fx * 0.8, p.y + 0.7, p.z + fz * 0.8);
+        mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(fx, 0, fz));
+        this.scene.add(mesh);
+        (this._projectiles = this._projectiles || []).push({
+            mesh, vx: fx * w.speed, vz: fz * w.speed, dmg: w.dmg, life: 1.5,
+            proj: w.proj, hitSet: new Set(),
+        });
+        this._spawnSwingFx(false);
+    }
+
+    _updateProjectiles(dt) {
+        if (!this._projectiles || !this._projectiles.length) return;
+        this._projectiles = this._projectiles.filter(pr => {
+            pr.life -= dt;
+            pr.mesh.position.x += pr.vx * dt;
+            pr.mesh.position.z += pr.vz * dt;
+            if (pr.proj === 'magic') {
+                pr.mesh.material.opacity = Math.max(0.25, pr.life / 1.5);
+                pr.mesh.rotation.y += dt * 8;
+            }
+            let consumed = false;
+            for (const m of this.monsters) {
+                if (m.state !== 'alive' || pr.hitSet.has(m)) continue;
+                const d = Math.hypot(m.group.position.x - pr.mesh.position.x, m.group.position.z - pr.mesh.position.z);
+                if (d < 1.2) {
+                    pr.hitSet.add(m);
+                    this._hitMonster(m, pr.dmg, 1.4, pr.mesh.position.x - pr.vx, pr.mesh.position.z - pr.vz);
+                    if (pr.proj === 'arrow') { consumed = true; break; }   // 箭单体即消失；魔法弹穿透
+                }
+            }
+            if (consumed || pr.life <= 0) {
+                this.scene.remove(pr.mesh); pr.mesh.geometry.dispose(); pr.mesh.material.dispose();
+                return false;
+            }
+            return true;
+        });
+    }
+
+    // 装备武器：设属性 + 手里显示模型 + 提示 + 角标
+    _equipWeapon(name) {
+        this.equippedWeapon = name;
+        this._buildWeaponModel(name);
+        const cfg = this._weaponCfg();
+        const how = cfg.kind === 'ranged' ? '按 J 发射！' : '按 J 近战，更狠！';
+        this._showEasterBadge(`⚔️ 装备了${name}！${how}`);
+        this._renderWeaponChip();
+    }
+
+    _buildWeaponModel(name) {
+        if (this._weaponModel) {
+            this.player.remove(this._weaponModel);
+            this._weaponModel.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
+            this._weaponModel = null;
+        }
+        if (!this.player) return;
+        const g = new THREE.Group();
+        if (name === '木剑') {
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.85, 0.02), new THREE.MeshToonMaterial({ color: 0xd2d8df }));
+            blade.position.y = 0.6; addOutline(blade, 0.02); g.add(blade);
+            const guard = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.06, 0.07), new THREE.MeshToonMaterial({ color: 0x8a6a3a }));
+            guard.position.y = 0.16; g.add(guard);
+            const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.22, 6), new THREE.MeshToonMaterial({ color: 0x6a4a2a }));
+            g.add(grip);
+            g.rotation.x = -0.5;
+        } else if (name === '小弓') {
+            const bow = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.04, 6, 14, Math.PI * 1.15), new THREE.MeshToonMaterial({ color: 0x8a5a2e }));
+            addOutline(bow, 0.02); g.add(bow);
+            const str = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.66, 4), new THREE.MeshBasicMaterial({ color: 0xeeeeee }));
+            g.add(str);
+            g.rotation.y = Math.PI / 2; g.rotation.x = 0.2;
+        } else { // 魔法书
+            const book = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.09), new THREE.MeshToonMaterial({ color: 0xd23a3a }));
+            addOutline(book, 0.02); g.add(book);
+            const pages = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.36, 0.07), new THREE.MeshToonMaterial({ color: 0xfff3e0 }));
+            pages.position.z = 0.02; g.add(pages);
+            g.rotation.x = -0.3;
+        }
+        g.position.set(0.34, 0.66, -0.14);
+        this.player.add(g);
+        this._weaponModel = g;
+    }
+
+    _renderWeaponChip() {
+        let chip = document.getElementById('weapon-chip');
+        if (!chip) {
+            chip = document.createElement('div');
+            chip.id = 'weapon-chip';
+            Object.assign(chip.style, {
+                position: 'fixed', left: '12px', bottom: '12px',
+                padding: '6px 12px', background: 'rgba(0,0,0,0.45)', color: '#fff',
+                borderRadius: '12px', fontSize: '15px', fontWeight: 'bold', zIndex: '6',
+                pointerEvents: 'none',
+            });
+            document.body.appendChild(chip);
+        }
+        const emoji = { '木剑': '🗡️', '小弓': '🏹', '魔法书': '📕' }[this.equippedWeapon] || '👊';
+        chip.textContent = `${emoji} ${this.equippedWeapon || '拳头'}`;
+    }
+
+    // 挥击弧光（按 J 即播，朝镜头前方）；big=木剑挥得更大
+    _spawnSwingFx(big = false) {
+        const r0 = big ? 0.6 : 0.55, r1 = big ? 1.35 : 1.0;
         const ring = new THREE.Mesh(
-            new THREE.RingGeometry(0.55, 1.0, 24, 1, Math.PI * 0.15, Math.PI * 1.2),
+            new THREE.RingGeometry(r0, r1, 24, 1, Math.PI * 0.15, Math.PI * 1.2),
             new THREE.MeshBasicMaterial({
                 color: 0xffffff, transparent: true, opacity: 0.9,
                 side: THREE.DoubleSide, depthWrite: false, fog: false,
@@ -10767,6 +10897,7 @@ export class Game3D {
         this._updateHurtFlash(dt);
         this._updateDamageNumbers(dt);
         this._updateMeleeFx(dt);
+        this._updateProjectiles(dt);
         this._updateButterflies();
         this._updateSkyClouds(dt);
         this._updateBirdFlock(dt);
