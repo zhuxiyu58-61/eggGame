@@ -904,6 +904,7 @@ export class Game3D {
         this._buildLampposts();
         this._addVillageLife();
         this._addMarketStalls();
+        this._buildShop();
         this._addBunting();
         this._addPlazaFlowers();
         this._buildCampfires();
@@ -9900,6 +9901,161 @@ export class Game3D {
         this._showEasterBadge('🎣 先钓条鱼(按 F)再来烤吧～');
     }
 
+    // ========= 村庄商店：花携带宝石买武器/爱心/回血/烤鱼 =========
+    _buildShop() {
+        const X = 0, Z = 18;
+        this._shopPos = { x: X, z: Z };
+        const g = new THREE.Group();
+        const wood = new THREE.MeshToonMaterial({ color: 0x8a5a32 });
+        const woodDark = new THREE.MeshToonMaterial({ color: 0x5e3c1f });
+        // 台面 + 前挡
+        const counter = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.18, 1.1), wood);
+        counter.position.y = 0.95; counter.castShadow = true; addOutline(counter, 0.03); g.add(counter);
+        const front = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.9, 0.1), woodDark);
+        front.position.set(0, 0.5, 0.52); g.add(front);
+        // 立柱 + 蓝白条纹遮阳棚
+        for (const px of [-1.4, 1.4]) for (const pz of [-0.5, 0.5]) {
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 2.5, 6), woodDark);
+            post.position.set(px, 1.25, pz); g.add(post);
+        }
+        const awn = new THREE.Group(); const n = 10, w = 3.5;
+        for (let i = 0; i < n; i++) {
+            const st = new THREE.Mesh(new THREE.BoxGeometry(w / n, 0.05, 1.8), new THREE.MeshToonMaterial({ color: i % 2 ? 0x4a86d6 : 0xf3efe2 }));
+            st.position.set(-w / 2 + (i + 0.5) * (w / n), 0, 0); awn.add(st);
+        }
+        awn.position.y = 2.6; awn.rotation.x = -0.32; addOutline(awn, 0.02); g.add(awn);
+        // 招牌
+        const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.58), new THREE.MeshBasicMaterial({ map: makeSignTexture('🛒 商店'), transparent: true }));
+        sign.position.set(0, 1.95, 0.58); g.add(sign);
+        // 台面摆几件货（武器图标方块）
+        const goods = [[-0.9, 0xcfd6df], [0, 0xd23a3a], [0.9, 0xffd24a]];
+        goods.forEach(([gx, col]) => {
+            const it = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.34, 0.22), new THREE.MeshToonMaterial({ color: col }));
+            it.position.set(gx, 1.2, 0); addOutline(it, 0.02); g.add(it);
+        });
+        // 店主（简单蛋人，站柜台后）
+        const keeper = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.7, 10), new THREE.MeshToonMaterial({ color: 0x6fae6a }));
+        body.position.y = 0.95; addOutline(body, 0.03); keeper.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 10), new THREE.MeshToonMaterial({ color: 0xffe3d0 }));
+        head.position.y = 1.5; addOutline(head, 0.03); keeper.add(head);
+        const hat = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.3, 10), new THREE.MeshToonMaterial({ color: 0xd23a3a }));
+        hat.position.y = 1.78; keeper.add(hat);
+        for (const sx of [-1, 1]) {
+            const eye = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 5), new THREE.MeshBasicMaterial({ color: 0x1a1a2e }));
+            eye.position.set(sx * 0.09, 1.54, -0.22); keeper.add(eye);
+        }
+        keeper.position.set(0, 0, -0.55); g.add(keeper);
+
+        g.position.set(X, this._terrainH(X, Z), Z);
+        g.rotation.y = Math.PI;                    // 柜台正面朝广场(-z)
+        this.scene.add(g);
+        this._addPropCollider(X, Z - 0.3, 1.6, 2.6);   // 柜台后半截当障碍，前面可走近
+        this._shopGroup = g;
+    }
+
+    _nearShop() {
+        if (!this._shopPos) return false;
+        const p = this.player.position;
+        return Math.hypot(p.x - this._shopPos.x, p.z - this._shopPos.z) < 4.0;
+    }
+
+    _shopItems() {
+        return [
+            { emoji: '🗡️', name: '木剑', price: 2500, desc: '近战 +1 伤害、范围更大', buy: () => this._equipWeapon('木剑') },
+            { emoji: '🏹', name: '小弓', price: 5000, desc: '远程射箭', buy: () => this._equipWeapon('小弓') },
+            { emoji: '📕', name: '魔法书', price: 9000, desc: '远程魔法弹·穿透·伤害 2', buy: () => this._equipWeapon('魔法书') },
+            { emoji: '❤️', name: '回满血', price: 800, desc: '当前这条命回满血', cond: () => this.playerHP < this.playerHPMax, buy: () => { this.playerHP = this.playerHPMax; this._renderPlayerHP(); this._hpBarFlash = 0.4; } },
+            { emoji: '💖', name: '多一颗爱心', price: 6000, desc: '多一条命', cond: () => this.playerLives < this.playerLivesMax, buy: () => { this.playerLives++; this._renderHearts(); } },
+            { emoji: '🍢', name: '烤鱼 ×1', price: 1200, desc: '装进背包，篝火旁/受伤时按 G 吃回血', buy: () => this._addToInventory('🍢') },
+        ];
+    }
+
+    _openShop() {
+        if (this._shopOpen) return;
+        this._shopOpen = true;
+        if (document.pointerLockElement) document.exitPointerLock?.();
+        const el = document.createElement('div');
+        el.id = 'shop-overlay';
+        Object.assign(el.style, {
+            position: 'fixed', inset: '0', zIndex: '40', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(20,12,30,0.55)', backdropFilter: 'blur(2px)',
+        });
+        el.innerHTML = `
+            <div style="width:min(92vw,520px);max-height:86vh;overflow:auto;background:linear-gradient(160deg,#fff7ee,#ffe9d6);
+                 border-radius:20px;padding:18px 18px 14px;box-shadow:0 12px 40px rgba(0,0,0,0.4);font-family:'Microsoft YaHei',sans-serif">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <div style="font-size:24px;font-weight:bold;color:#7a4a22">🛒 村庄商店</div>
+                <div id="shop-gold" style="font-size:18px;font-weight:bold;color:#c8861a"></div>
+              </div>
+              <div style="font-size:13px;color:#9a7a55;margin-bottom:10px">用携带的宝石购买（倒下会丢宝石，记得早点花/存）</div>
+              <div id="shop-list" style="display:flex;flex-direction:column;gap:8px"></div>
+              <button id="shop-close" style="margin-top:14px;width:100%;font-size:18px;font-weight:bold;color:#fff;
+                   padding:11px;border:none;border-radius:14px;cursor:pointer;background:linear-gradient(90deg,#ff9e6e,#ffce5a)">关闭 (B)</button>
+            </div>`;
+        document.body.appendChild(el);
+        this._shopEl = el;
+        el.querySelector('#shop-close').onclick = () => this._closeShop();
+        el.onclick = (e) => { if (e.target === el) this._closeShop(); };
+        this._renderShopList();
+    }
+
+    _renderShopList() {
+        if (!this._shopEl) return;
+        const gold = this.carriedValue || 0;
+        this._shopEl.querySelector('#shop-gold').textContent = `💰 ${gold.toLocaleString()}`;
+        const list = this._shopEl.querySelector('#shop-list');
+        const items = this._shopItems();
+        list.innerHTML = '';
+        items.forEach((it, i) => {
+            const owned = (it.name === '木剑' || it.name === '小弓' || it.name === '魔法书') && this.equippedWeapon === it.name;
+            const disabledByCond = it.cond && !it.cond();
+            const afford = gold >= it.price;
+            const row = document.createElement('div');
+            Object.assign(row.style, {
+                display: 'flex', alignItems: 'center', gap: '10px',
+                background: 'rgba(255,255,255,0.7)', borderRadius: '12px', padding: '8px 10px',
+            });
+            row.innerHTML = `
+                <div style="font-size:30px;width:40px;text-align:center">${it.emoji}</div>
+                <div style="flex:1">
+                  <div style="font-size:16px;font-weight:bold;color:#5a3c22">${it.name}</div>
+                  <div style="font-size:12px;color:#977">${it.desc}</div>
+                </div>
+                <button data-i="${i}" style="font-size:14px;font-weight:bold;white-space:nowrap;
+                     padding:8px 12px;border:none;border-radius:10px"></button>`;
+            const btn = row.querySelector('button');
+            if (owned) { btn.textContent = '已装备'; btn.style.background = '#9bbf8f'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
+            else if (disabledByCond) { btn.textContent = it.name === '回满血' ? '血已满' : '已满'; btn.style.background = '#cbb'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
+            else {
+                btn.textContent = `💰 ${it.price.toLocaleString()}`;
+                btn.style.cursor = 'pointer';
+                btn.style.background = afford ? 'linear-gradient(90deg,#7ac77a,#9be36a)' : '#d8c0c0';
+                btn.style.color = '#fff';
+                btn.onclick = () => this._buyShopItem(it);
+            }
+            list.appendChild(row);
+        });
+    }
+
+    _buyShopItem(it) {
+        const gold = this.carriedValue || 0;
+        if (gold < it.price) { this._showEasterBadge('💰 宝石不够，去打怪/开宝箱攒一点～'); this._tone(160, 0.18, 'sawtooth', 0.05); return; }
+        if (it.cond && !it.cond()) return;
+        this.carriedValue = gold - it.price;
+        this._renderTreasureChip();
+        it.buy();
+        this._showEasterBadge(`🛒 买了 ${it.emoji} ${it.name}！`);
+        this._tone(680, 0.1, 'sine', 0.06); this._tone(1020, 0.14, 'sine', 0.05, 0.07);
+        this._renderShopList();
+    }
+
+    _closeShop() {
+        this._shopOpen = false;
+        if (this._shopEl) { this._shopEl.remove(); this._shopEl = null; }
+    }
+
     // 三条路入口横挂三角彩旗串（catenary 下垂 + 随风轻摆）
     _addBunting() {
         this._bunting = [];
@@ -10723,6 +10879,13 @@ export class Game3D {
         this._onKeyDown = (e) => {
             this.keys[e.code] = true;
             this._ensureAudio();  // 首次按键解锁 AudioContext
+            // 商店开着时：只响应关闭，吞掉其它键（人物不动）
+            if (this._shopOpen) {
+                this.keys[e.code] = false;
+                if (e.code === 'KeyB' || e.code === 'Escape') { e.preventDefault(); this._closeShop(); }
+                return;
+            }
+            if (e.code === 'KeyB') { e.preventDefault(); if (this._nearShop()) this._openShop(); else this._showEasterBadge('🛒 走到广场商店摊前再按 B'); }
             if (e.code === 'KeyC' && this.onOpenCustomize) {
                 e.preventDefault();
                 this.onOpenCustomize();
@@ -10880,7 +11043,7 @@ export class Game3D {
             this.hintEl.style.cursor = 'pointer';
             this.hintEl.style.userSelect = 'none';
             this.hintEl.title = '点一下 / 按 H 收起或展开';
-            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · M 音乐 · C 换造型 · ESC 释放';
+            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · B 商店 · M 音乐 · C 换造型 · ESC 释放';
             const tog = document.createElement('span');
             const txt = document.createElement('span');
             txt.style.marginLeft = '8px';
@@ -10961,6 +11124,12 @@ export class Game3D {
         this._updateBunting(performance.now() * 0.001);
         this._updateCampfires(dt);
         this._updateBlossomPetals(dt);
+        // 商店靠近提示（进范围弹一次）
+        if (this._shopPos && !this._shopOpen) {
+            const near = this._nearShop();
+            if (near && !this._shopHintShown) { this._shopHintShown = true; this._showEasterBadge('🛒 按 B 逛商店'); }
+            else if (!near) this._shopHintShown = false;
+        }
         this._updateFireworks(dt);
         this._updateBats(dt);
         this._updateWind(dt);
@@ -11031,6 +11200,7 @@ export class Game3D {
     }
 
     _updatePlayer(dt) {
+        if (this._shopOpen) return;             // 逛商店时人物定住
         // 计算目标方向（原始 WASD 输入）
         let ix = 0, iz = 0;
         if (this.keys['KeyW'] || this.keys['ArrowUp']) iz += 1;
