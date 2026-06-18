@@ -1057,16 +1057,33 @@ export class Game3D {
         top.position.set(0, doorH, D / 2);
         group.add(top);
 
-        // 门头招牌（加入 fadeables，进屋后跟着墙一起淡，避免挡住相机视野）
+        // 门头悬挂木招牌：横托架 + 两根小链 + 带木纹的吊牌（加入 fadeables 进屋淡出）
         if (signText) {
+            const signY = doorH + 0.95, signZ = D / 2 + 0.34;
+            const bracketMat = new THREE.MeshToonMaterial({ color: 0x6e4a2c });
+            // 横托架（从墙上伸出）
+            const bracket = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.1), bracketMat);
+            bracket.position.set(0, signY + 0.42, signZ - 0.16);
+            addOutline(bracket, 0.03); group.add(bracket); fadeables.push(bracket);
+            const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.4), bracketMat);
+            arm.position.set(0, signY + 0.42, signZ - 0.34); group.add(arm); fadeables.push(arm);
+            // 两根挂链
+            for (const sx of [-0.78, 0.78]) {
+                const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.4, 5), new THREE.MeshToonMaterial({ color: 0x4a3a2a }));
+                chain.position.set(sx, signY + 0.22, signZ); group.add(chain); fadeables.push(chain);
+            }
+            // 吊牌（双面木纹 + 文字）
             const signTex = makeSignTexture(signText);
-            const sign = new THREE.Sprite(new THREE.SpriteMaterial({
-                map: signTex, depthWrite: false, transparent: true,
-            }));
-            sign.scale.set(2.0, 0.7, 1);
-            sign.position.set(0, doorH + 0.55, D / 2 + 0.12);
-            group.add(sign);
-            fadeables.push(sign);
+            const board = new THREE.Mesh(
+                new THREE.PlaneGeometry(1.8, 0.62),
+                new THREE.MeshBasicMaterial({ map: signTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
+            );
+            board.position.set(0, signY, signZ);
+            group.add(board); fadeables.push(board);
+            // 牌子木框
+            const frame = new THREE.Mesh(new THREE.BoxGeometry(1.92, 0.74, 0.06), bracketMat);
+            frame.position.set(0, signY, signZ - 0.04);
+            group.add(frame); fadeables.push(frame);
         }
 
         // 屋顶（金字塔锥）
@@ -2101,6 +2118,7 @@ export class Game3D {
         if (prog.questDone && this.questCount >= this.questItems.length) {
             this._lightBellTower(true);
         }
+        this._refreshQuestDialogue();   // 按当前阶段设各伙伴台词
     }
 
     _addQuestItem(opt) {
@@ -2211,6 +2229,7 @@ export class Game3D {
         this._tone(740, 0.12, 'sine', 0.07);
         this._tone(1100, 0.16, 'sine', 0.06, 0.07);
         this._showEasterBadge(`✨ 守卫倒下了！走过去拿起 ${it.emoji} ${it.label}`);
+        this._refreshQuestDialogue();
     }
 
     // 拿起宝物 → 进入"携带回去交差"
@@ -2230,6 +2249,7 @@ export class Game3D {
         this._tone(880, 0.10, 'sine', 0.07);
         this._tone(1320, 0.12, 'sine', 0.06, 0.06);
         this._showEasterBadge(`${it.emoji} 拿到${it.label}！快带回去交给${it.giverLabel}`);
+        this._refreshQuestDialogue();
     }
 
     // 交差完成（存档回放 silent=true 时直接到此）
@@ -8545,6 +8565,44 @@ export class Game3D {
         const bw = 3.6;
         rec.bubble.scale.set(bw, bw / (tex.userData?.aspect || 3.4), 1);
         if (old) old.dispose();
+    }
+
+    // 任务感知对话：各区伙伴的台词随心愿之物阶段变化（sealed→revealed→carrying；done 由交付时另设道谢）
+    _refreshQuestDialogue() {
+        if (!this.questItems) return;
+        const TABLE = {
+            fireseed: {
+                sealed: '呜…我冷得直发抖，话都说不利索了。\n暖灯火种被雪原最深处的守卫怪抢走了，\n你能帮我把它抢回来吗？',
+                revealed: '守卫被你打跑啦，太好了！\n快把那团暖灯火种拿起来，给我送来好吗？',
+                carrying: '对对，你手里捧着的就是火种！\n快过来一点，我都等不及暖和暖和了～',
+            },
+            sungem: {
+                sealed: '天一直灰蒙蒙的，嗓子都快冒烟了…\n太阳宝石在沙漠最深处，被守卫怪看着。\n帮我抢回来放回金字塔，阳光就回来啦！',
+                revealed: '守卫倒下了！太阳宝石就在那儿发亮，\n快去把它拿起来，放回金字塔吧！',
+                carrying: '你拿到太阳宝石啦！\n快放回金字塔顶，让暖阳照回沙漠～',
+            },
+            moonstone: {
+                sealed: '唉，我年纪大了游得慢，追不上那家伙…\n月光石被守卫怪护在湖那头，\n帮我抢回来好吗？夜里它能照亮回家的路。',
+                revealed: '守卫被你赶跑了，谢谢你！\n湖那头那颗会发光的就是月光石，去拿来吧～',
+                carrying: '你手里那颗亮亮的就是月光石！\n快交给我，今晚就能照亮回家的路啦。',
+            },
+            starleaf: {
+                sealed: '嘘——你听，森林的光在一点点变弱…\n星光草被深处的守卫夺走了，没有它，\n萤火虫会睡着，森林会慢慢暗下去。帮帮我？',
+                revealed: '守卫退散了！森林深处那株发光的草，\n就是星光草，快去把它摘回来～',
+                carrying: '你采到星光草啦！\n快交给我，萤火虫就会醒过来，森林又会亮起来～',
+            },
+        };
+        for (const it of this.questItems) {
+            if (it.stage === 'done') continue;            // 道谢由交付时设，不覆盖
+            const rec = this[it.giver];
+            const lines = TABLE[it.key];
+            if (!rec || !lines) continue;
+            const line = lines[it.stage] || lines.sealed;
+            if (line && rec._lastStage !== it.stage) {
+                this._setStoryLine(rec, line);
+                rec._lastStage = it.stage;
+            }
+        }
     }
 
     _updateStoryNpcs(dt) {
