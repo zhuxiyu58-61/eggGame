@@ -890,7 +890,7 @@ export class Game3D {
         this.bunnies = [];
         this.ripples = [];
         this._rippleTimer = 0;
-        this.__t('buildHouses', () => this._buildHouses());
+        this.__t('buildHouses', () => this._collectStatic(() => this._buildHouses()));
         this._buildWindmill(-58, -22);
         this._buildSwing(-30, 36);
         this.__t('buildLake', () => this._buildLake(48, -42));
@@ -1238,6 +1238,8 @@ export class Game3D {
         ];
         walls.forEach(w => this.obstacles.push(w));
 
+        // 墙体/屋顶/招牌进屋要变透明，绝不能并入静态合并（标记 noMerge，连同其描边子树一起跳过）
+        fadeables.forEach(f => { f.userData.noMerge = true; });
         // 记录到 houses 给透明化用
         this.houses.push({
             // inside 检测放宽到外墙边（不再减 wallT）：站门口就算"屋内"
@@ -4194,18 +4196,27 @@ export class Game3D {
             if (child.userData && child.userData.mergeStatic) remove.push(child);
         }
         let srcMeshes = 0;
-        const survivors = [];                            // 不可合的网格(带贴图等)原样保留
         for (const child of remove) {
             child.updateWorldMatrix(true, true);
-            const meshes = [];
-            child.traverse(o => { if (o.isMesh) meshes.push(o); });
-            for (const o of meshes) {
-                const m = o.material;
-                const vtx = m && m.vertexColors === true;
-                // 带贴图/无颜色基准 → 不合并，保留
-                if (!m || m.map || (!vtx && !m.color)) { survivors.push(o); continue; }
-                srcMeshes++;
+            // 收集可合网格：跳过 noMerge 子树(墙/灯等)、带贴图、无色基准
+            const toMerge = [];
+            const walk = (o, blocked) => {
+                const block = blocked || (o.userData && o.userData.noMerge);
+                if (o.isMesh && !block) {
+                    const m = o.material;
+                    const emissive = m && m.emissive && (m.emissive.r + m.emissive.g + m.emissive.b) > 0.02;
+                    // 跳过：带贴图 / 发光(蜡烛/台灯/串灯,且emissive不分桶) / 无色基准
+                    if (m && !m.map && !emissive && (m.vertexColors === true || m.color)) toMerge.push(o);
+                }
+                for (const c of o.children) walk(c, block);
+            };
+            walk(child, false);
+            let plucked = 0;
+            for (const o of toMerge) {
+                srcMeshes++; plucked++;
                 o.updateWorldMatrix(true, false);
+                const m = o.material;
+                const vtx = m.vertexColors === true;
                 const key = vtx
                     ? `VTX|${m.type}|flat${m.flatShading ? 1 : 0}|s${m.side || 0}|t${m.transparent ? 1 : 0}`
                     : `${m.type}|${quant(m.color)}|s${m.side || 0}|t${m.transparent ? 1 : 0}|o${(m.opacity ?? 1).toFixed(2)}`;
@@ -4219,11 +4230,11 @@ export class Game3D {
                 const g = this._cleanGeoForMerge(o.geometry, vtx);
                 g.applyMatrix4(o.matrixWorld);
                 bk.geos.push(g);
+                o.parent && o.parent.remove(o);            // 从原 group 拔出(不 dispose,描边可能共享几何)
             }
+            // 确实拔过网格且整组被拔空 → 移除空 group；否则(还有墙/灯/招牌或本就非散物)保留
+            if (plucked > 0 && child.children.length === 0) this.scene.remove(child);
         }
-        // 保留的网格 reparent 到场景(保住世界变换)，再移除原 group
-        for (const o of survivors) this.scene.attach(o);
-        for (const child of remove) this.scene.remove(child);
         let merged = 0;
         for (const { mat, geos } of buckets.values()) {
             const mg = mergeGeometries(geos, false);
