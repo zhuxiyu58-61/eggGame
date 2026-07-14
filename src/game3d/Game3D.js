@@ -439,6 +439,8 @@ export class Game3D {
         _t('buildPlayer', () => this._buildPlayer());
         _t('setupInput', () => this._setupInput());
         _t('setupStatusUI', () => this._setupStatusUI());
+        this._loadGameState();
+        this._startAutoSave();
 
         this._onResize = this._onResize.bind(this);
         window.addEventListener('resize', this._onResize);
@@ -2400,6 +2402,74 @@ export class Game3D {
             setTimeout(() => { el.remove(); this._winEl = null; }, 800);
             this.container?.requestPointerLock?.();
         };
+    }
+
+    _loadGameState() {
+        let save = null;
+        try { save = JSON.parse(localStorage.getItem('eggGameSaveV1')); } catch (e) {}
+        if (!save || typeof save !== 'object') return;
+        const num = (value, fallback, min = 0) => Number.isFinite(Number(value)) ? Math.max(min, Number(value)) : fallback;
+        this.carriedValue = num(save.carriedValue, this.carriedValue || 0);
+        this.warehouseValue = num(save.warehouseValue, this.warehouseValue || 0);
+        this.bankedTotal = num(save.bankedTotal, this.bankedTotal || 0);
+        this.playerHPMax = num(save.playerHPMax, this.playerHPMax || 5, 1);
+        this.playerHP = Math.min(this.playerHPMax, num(save.playerHP, this.playerHPMax));
+        this.playerLivesMax = num(save.playerLivesMax, this.playerLivesMax || 5, 1);
+        this.playerLives = Math.min(this.playerLivesMax, num(save.playerLives, this.playerLives || 3));
+        this._treasureWon = !!save.treasureWon;
+        this._warehouseOwned = new Set(Array.isArray(save.warehouseOwned) ? save.warehouseOwned : []);
+        const allowedWeapons = ['木剑', '小弓', '魔法书', '刀', '枪'];
+        if (allowedWeapons.includes(save.equippedWeapon)) {
+            this.equippedWeapon = save.equippedWeapon;
+            this._buildWeaponModel(save.equippedWeapon);
+            this._renderWeaponChip();
+        }
+        if (save.player && Number.isFinite(save.player.x) && Number.isFinite(save.player.z) && this.player) {
+            const x = Math.max(-155, Math.min(155, save.player.x));
+            const z = Math.max(-155, Math.min(205, save.player.z));
+            this.player.position.set(x, PLAYER_RADIUS * (this.player.scale.x || 1), z);
+        }
+        this._renderTreasureChip();
+        this._renderExtractChip();
+        this._renderPlayerHP();
+        this._renderHearts();
+        this._showEasterBadge('💾 已读取自动存档');
+    }
+
+    _saveGameState() {
+        if (this._destroyed) return;
+        try {
+            const p = this.player?.position;
+            let previous = {};
+            try { previous = JSON.parse(localStorage.getItem('eggGameSaveV1')) || {}; } catch (e) {}
+            if (Object.keys(previous).length) {
+                localStorage.setItem('eggGameSaveBackup', JSON.stringify(previous));
+            }
+            localStorage.setItem('eggGameSaveV1', JSON.stringify({
+                ...previous,
+                version: Math.max(1, Number(previous.version) || 1),
+                savedAt: Date.now(),
+                carriedValue: this.carriedValue || 0,
+                warehouseValue: this.warehouseValue || 0,
+                bankedTotal: this.bankedTotal || 0,
+                equippedWeapon: this.equippedWeapon || null,
+                warehouseOwned: [...(this._warehouseOwned || [])],
+                playerHP: this.playerHP, playerHPMax: this.playerHPMax,
+                playerLives: this.playerLives, playerLivesMax: this.playerLivesMax,
+                treasureWon: !!this._treasureWon,
+                player: p ? { x: p.x, z: p.z } : null,
+            }));
+            this._saveProgress();
+            this._saveInventory();
+            this._saveAchievements();
+        } catch (e) {}
+    }
+
+    _startAutoSave() {
+        this._autoSaveTimer = setInterval(() => this._saveGameState(), 5000);
+        this._onPageHideSave = () => this._saveGameState();
+        window.addEventListener('pagehide', this._onPageHideSave);
+        document.addEventListener('visibilitychange', this._onPageHideSave);
     }
 
     _loadProgress() {
@@ -11863,6 +11933,10 @@ export class Game3D {
     }
 
     destroy() {
+        this._saveGameState();
+        clearInterval(this._autoSaveTimer);
+        window.removeEventListener('pagehide', this._onPageHideSave);
+        document.removeEventListener('visibilitychange', this._onPageHideSave);
         this._destroyed = true;
         cancelAnimationFrame(this.animId);
         window.removeEventListener('keydown', this._onKeyDown);
