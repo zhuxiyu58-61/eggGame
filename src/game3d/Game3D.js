@@ -5764,6 +5764,7 @@ export class Game3D {
         this.carriedValue = 0;
         this.bankedTotal = 0;      // 每局从 0 攒起，存满 winGoal = 通关
         this._treasureWon = false;
+        this.gemBag = {};          // 本次冒险拾到的宝石：name -> { emoji, value, count }
 
         // 14 种掉落
         this.lootTable = [
@@ -6073,6 +6074,7 @@ export class Game3D {
             this.carriedValue = Math.max(0, this.carriedValue + loot.value);
             this._renderTreasureChip();
         }
+        if (loot.kind === 'gem') this._recordGem(loot);
         if (loot.kind === 'weapon') {
             this._addToInventory(loot.emoji);
             this._equipWeapon(loot.name);
@@ -7161,15 +7163,119 @@ export class Game3D {
                 background: 'rgba(0,0,0,0.45)',
                 borderRadius: '12px',
                 zIndex: '6',
-                pointerEvents: 'none',
+                pointerEvents: 'auto',
+                cursor: 'pointer',
+                alignItems: 'center',
             });
+            bar.title = '点开看仓库（宝石 / 道具）· 快捷键 I';
+            bar.onclick = () => this._openBag();
             document.body.appendChild(bar);
         }
-        bar.innerHTML = this.inventory.length === 0
-            ? '<span style="color:#aaa;font-size:14px">背包空空</span>'
+        const label = '<span style="font-size:16px;margin-right:4px">🎒</span>';
+        bar.innerHTML = label + (this.inventory.length === 0
+            ? '<span style="color:#ccc;font-size:14px">仓库（点开看看）</span>'
             : this.inventory.map(e =>
                 `<span style="font-size:24px;display:inline-block;width:30px;text-align:center;">${e}</span>`
-            ).join('');
+            ).join(''));
+    }
+
+    // ========= 仓库：查看拾到的宝石 / 道具 =========
+    _recordGem(loot) {
+        if (!this.gemBag) this.gemBag = {};
+        const g = this.gemBag[loot.name] || (this.gemBag[loot.name] = { emoji: loot.emoji, value: loot.value, count: 0 });
+        g.count++;
+    }
+
+    _bagItemName(emoji) {
+        return {
+            '🐟': '小鱼', '🐠': '花鱼', '🐡': '河豚', '🦐': '小虾', '🌿': '水草', '🍢': '烤鱼串',
+            '🥾': '破鞋', '🥬': '烂菜叶', '📰': '老报纸', '⭐': '小星星',
+            '🗡️': '木剑', '🏹': '小弓', '📕': '魔法书',
+        }[emoji] || '神秘道具';
+    }
+
+    _openBag() {
+        if (this._bagOpen) { this._closeBag(); return; }
+        if (this._shopOpen) return;
+        this._bagOpen = true;
+        if (document.pointerLockElement) document.exitPointerLock?.();
+        const el = document.createElement('div');
+        el.id = 'bag-overlay';
+        Object.assign(el.style, {
+            position: 'fixed', inset: '0', zIndex: '41', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(16,20,34,0.55)', backdropFilter: 'blur(2px)',
+        });
+        document.body.appendChild(el);
+        this._bagEl = el;
+        el.onclick = (e) => { if (e.target === el) this._closeBag(); };
+        this._renderBag();
+    }
+
+    _renderBag() {
+        if (!this._bagEl) return;
+        const carried = this.carriedValue || 0;
+        const banked = this.bankedTotal || 0;
+
+        // 宝石区
+        const gems = Object.entries(this.gemBag || {}).sort((a, b) => b[1].value - a[1].value);
+        const gemHtml = gems.length === 0
+            ? '<div style="color:#8a93b0;font-size:14px;padding:6px 2px">还没捡到宝石～去打开宝箱找找吧！</div>'
+            : gems.map(([name, g]) => `
+                <div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,0.06);border-radius:12px;padding:8px 12px">
+                  <div style="font-size:28px;width:38px;text-align:center">${g.emoji}</div>
+                  <div style="flex:1"><div style="font-size:15px;font-weight:bold;color:#eef2ff">${name}</div>
+                    <div style="font-size:12px;color:#aab4d4">每颗 💰 ${g.value.toLocaleString()}</div></div>
+                  <div style="font-size:18px;font-weight:bold;color:#ffd76a">×${g.count}</div>
+                </div>`).join('');
+
+        // 道具区（按 emoji 归类计数）
+        const counts = {};
+        for (const e of (this.inventory || [])) counts[e] = (counts[e] || 0) + 1;
+        const items = Object.entries(counts);
+        const itemHtml = items.length === 0
+            ? '<div style="color:#8a93b0;font-size:14px;padding:6px 2px">背包空空～去钓鱼、开箱、打怪捡点东西吧！</div>'
+            : items.map(([e, n]) => `
+                <div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,0.06);border-radius:12px;padding:8px 12px">
+                  <div style="font-size:26px;width:38px;text-align:center">${e}</div>
+                  <div style="flex:1;font-size:15px;font-weight:bold;color:#eef2ff">${this._bagItemName(e)}</div>
+                  <div style="font-size:18px;font-weight:bold;color:#9fe6a0">×${n}</div>
+                </div>`).join('');
+
+        // 心愿之物 / 星星总览
+        const questDone = (this.questItems || []).filter(it => it.collected);
+        const questMarks = (this.questItems || []).map(it =>
+            it.collected ? it.emoji : '⬜').join(' ');
+        const stars = this.starsCollected || 0;
+
+        this._bagEl.innerHTML = `
+          <div style="width:min(94vw,560px);max-height:88vh;overflow:auto;background:linear-gradient(160deg,#20263f,#161a2c);
+               border-radius:20px;padding:18px 18px 16px;box-shadow:0 12px 40px rgba(0,0,0,0.5);font-family:'Microsoft YaHei',sans-serif;color:#eef2ff">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div style="font-size:24px;font-weight:bold">🎒 我的仓库</div>
+              <div style="text-align:right;font-size:13px;line-height:1.5">
+                <div>身上携带 <b style="color:#ffd76a">💰 ${carried.toLocaleString()}</b></div>
+                <div style="color:#9fb0d6">宝库已存 🏦 ${banked.toLocaleString()}</div>
+              </div>
+            </div>
+            <div style="font-size:15px;font-weight:bold;margin:4px 0 6px;color:#ffd76a">💎 拾到的宝石</div>
+            <div style="display:flex;flex-direction:column;gap:6px">${gemHtml}</div>
+            <div style="font-size:15px;font-weight:bold;margin:14px 0 6px;color:#9fe6a0">🎒 道具</div>
+            <div style="display:flex;flex-direction:column;gap:6px">${itemHtml}</div>
+            <div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.05);border-radius:12px;font-size:13px;line-height:1.7">
+              <div>🌟 心愿之物 ${questDone.length}/${(this.questItems || []).length}　<span style="font-size:16px">${questMarks}</span></div>
+              <div>⭐ 收集的星星 ${stars} 颗</div>
+            </div>
+            <div style="font-size:12px;color:#8a93b0;margin-top:8px">💡 宝石会并进「携带💰」，去魔法阵存进宝库才不会被怪抢走哦</div>
+            <button id="bag-close" style="margin-top:14px;width:100%;font-size:18px;font-weight:bold;color:#fff;
+                 padding:11px;border:none;border-radius:14px;cursor:pointer;background:linear-gradient(90deg,#6a8cff,#8f6aff)">关闭 (I)</button>
+          </div>`;
+        this._bagEl.querySelector('#bag-close').onclick = () => this._closeBag();
+    }
+
+    _closeBag() {
+        this._bagOpen = false;
+        if (this._bagEl) { this._bagEl.remove(); this._bagEl = null; }
     }
 
     // ========= 成就系统 =========
@@ -10133,9 +10239,18 @@ export class Game3D {
         ];
     }
 
+    // 可卖出的道具单价（武器是装备不收；宝石本身就是钱不用卖）
+    _sellPrice(emoji) {
+        return {
+            '🐟': 400, '🐠': 400, '🐡': 450, '🦐': 500, '🍢': 700,
+            '🥾': 300, '🥬': 200, '📰': 250, '🌿': 150, '⭐': 800,
+        }[emoji] || 0;
+    }
+
     _openShop() {
         if (this._shopOpen) return;
         this._shopOpen = true;
+        this._shopTab = 'buy';
         if (document.pointerLockElement) document.exitPointerLock?.();
         const el = document.createElement('div');
         el.id = 'shop-overlay';
@@ -10147,11 +10262,15 @@ export class Game3D {
         el.innerHTML = `
             <div style="width:min(92vw,520px);max-height:86vh;overflow:auto;background:linear-gradient(160deg,#fff7ee,#ffe9d6);
                  border-radius:20px;padding:18px 18px 14px;box-shadow:0 12px 40px rgba(0,0,0,0.4);font-family:'Microsoft YaHei',sans-serif">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
                 <div style="font-size:24px;font-weight:bold;color:#7a4a22">🛒 村庄商店</div>
                 <div id="shop-gold" style="font-size:18px;font-weight:bold;color:#c8861a"></div>
               </div>
-              <div style="font-size:13px;color:#9a7a55;margin-bottom:10px">用携带的宝石购买（倒下会丢宝石，记得早点花/存）</div>
+              <div style="display:flex;gap:8px;margin-bottom:10px">
+                <button id="shop-tab-buy" style="flex:1;font-size:16px;font-weight:bold;padding:9px;border:none;border-radius:12px;cursor:pointer">🛍️ 买</button>
+                <button id="shop-tab-sell" style="flex:1;font-size:16px;font-weight:bold;padding:9px;border:none;border-radius:12px;cursor:pointer">💰 卖</button>
+              </div>
+              <div id="shop-hint" style="font-size:13px;color:#9a7a55;margin-bottom:10px"></div>
               <div id="shop-list" style="display:flex;flex-direction:column;gap:8px"></div>
               <button id="shop-close" style="margin-top:14px;width:100%;font-size:18px;font-weight:bold;color:#fff;
                    padding:11px;border:none;border-radius:14px;cursor:pointer;background:linear-gradient(90deg,#ff9e6e,#ffce5a)">关闭 (B)</button>
@@ -10159,6 +10278,8 @@ export class Game3D {
         document.body.appendChild(el);
         this._shopEl = el;
         el.querySelector('#shop-close').onclick = () => this._closeShop();
+        el.querySelector('#shop-tab-buy').onclick = () => { this._shopTab = 'buy'; this._renderShopList(); };
+        el.querySelector('#shop-tab-sell').onclick = () => { this._shopTab = 'sell'; this._renderShopList(); };
         el.onclick = (e) => { if (e.target === el) this._closeShop(); };
         this._renderShopList();
     }
@@ -10167,38 +10288,77 @@ export class Game3D {
         if (!this._shopEl) return;
         const gold = this.carriedValue || 0;
         this._shopEl.querySelector('#shop-gold').textContent = `💰 ${gold.toLocaleString()}`;
+        // 页签高亮
+        const tabBuy = this._shopEl.querySelector('#shop-tab-buy');
+        const tabSell = this._shopEl.querySelector('#shop-tab-sell');
+        const on = 'linear-gradient(90deg,#ff9e6e,#ffce5a)', off = 'rgba(0,0,0,0.08)';
+        tabBuy.style.background = this._shopTab === 'buy' ? on : off;
+        tabBuy.style.color = this._shopTab === 'buy' ? '#fff' : '#8a6a4a';
+        tabSell.style.background = this._shopTab === 'sell' ? on : off;
+        tabSell.style.color = this._shopTab === 'sell' ? '#fff' : '#8a6a4a';
+        const hint = this._shopEl.querySelector('#shop-hint');
         const list = this._shopEl.querySelector('#shop-list');
-        const items = this._shopItems();
         list.innerHTML = '';
-        items.forEach((it, i) => {
-            const owned = (it.name === '木剑' || it.name === '小弓' || it.name === '魔法书') && this.equippedWeapon === it.name;
-            const disabledByCond = it.cond && !it.cond();
-            const afford = gold >= it.price;
-            const row = document.createElement('div');
-            Object.assign(row.style, {
-                display: 'flex', alignItems: 'center', gap: '10px',
-                background: 'rgba(255,255,255,0.7)', borderRadius: '12px', padding: '8px 10px',
+
+        if (this._shopTab === 'buy') {
+            hint.textContent = '用携带的宝石购买（倒下会丢宝石，记得早点花/存）';
+            const items = this._shopItems();
+            items.forEach((it) => {
+                const owned = (it.name === '木剑' || it.name === '小弓' || it.name === '魔法书') && this.equippedWeapon === it.name;
+                const disabledByCond = it.cond && !it.cond();
+                const afford = gold >= it.price;
+                const row = this._shopRow(it.emoji, it.name, it.desc);
+                const btn = row.querySelector('button');
+                if (owned) { btn.textContent = '已装备'; btn.style.background = '#9bbf8f'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
+                else if (disabledByCond) { btn.textContent = it.name === '回满血' ? '血已满' : '已满'; btn.style.background = '#cbb'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
+                else {
+                    btn.textContent = `💰 ${it.price.toLocaleString()}`;
+                    btn.style.cursor = 'pointer';
+                    btn.style.background = afford ? 'linear-gradient(90deg,#7ac77a,#9be36a)' : '#d8c0c0';
+                    btn.style.color = '#fff';
+                    btn.onclick = () => this._buyShopItem(it);
+                }
+                list.appendChild(row);
             });
-            row.innerHTML = `
-                <div style="font-size:30px;width:40px;text-align:center">${it.emoji}</div>
-                <div style="flex:1">
-                  <div style="font-size:16px;font-weight:bold;color:#5a3c22">${it.name}</div>
-                  <div style="font-size:12px;color:#977">${it.desc}</div>
-                </div>
-                <button data-i="${i}" style="font-size:14px;font-weight:bold;white-space:nowrap;
-                     padding:8px 12px;border:none;border-radius:10px"></button>`;
-            const btn = row.querySelector('button');
-            if (owned) { btn.textContent = '已装备'; btn.style.background = '#9bbf8f'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
-            else if (disabledByCond) { btn.textContent = it.name === '回满血' ? '血已满' : '已满'; btn.style.background = '#cbb'; btn.style.color = '#fff'; btn.disabled = true; btn.style.cursor = 'default'; }
-            else {
-                btn.textContent = `💰 ${it.price.toLocaleString()}`;
-                btn.style.cursor = 'pointer';
-                btn.style.background = afford ? 'linear-gradient(90deg,#7ac77a,#9be36a)' : '#d8c0c0';
-                btn.style.color = '#fff';
-                btn.onclick = () => this._buyShopItem(it);
+        } else {
+            hint.textContent = '把背包里用不上的东西卖成宝石（武器是装备，不收）';
+            // 背包里可卖的道具按 emoji 归类
+            const counts = {};
+            for (const e of (this.inventory || [])) if (this._sellPrice(e) > 0) counts[e] = (counts[e] || 0) + 1;
+            const entries = Object.entries(counts);
+            if (entries.length === 0) {
+                list.innerHTML = '<div style="color:#9a7a55;font-size:14px;padding:10px 4px">背包里没有可卖的东西～去钓鱼、开箱捡点吧！</div>';
+                return;
             }
-            list.appendChild(row);
+            entries.forEach(([emoji, n]) => {
+                const price = this._sellPrice(emoji);
+                const row = this._shopRow(emoji, `${this._bagItemName(emoji)} ×${n}`, `每个卖 💰 ${price.toLocaleString()}`);
+                const btn = row.querySelector('button');
+                btn.textContent = `卖 💰 ${price.toLocaleString()}`;
+                btn.style.cursor = 'pointer';
+                btn.style.background = 'linear-gradient(90deg,#f5b74a,#ffd76a)';
+                btn.style.color = '#fff';
+                btn.onclick = () => this._sellShopItem(emoji);
+                list.appendChild(row);
+            });
+        }
+    }
+
+    _shopRow(emoji, name, desc) {
+        const row = document.createElement('div');
+        Object.assign(row.style, {
+            display: 'flex', alignItems: 'center', gap: '10px',
+            background: 'rgba(255,255,255,0.7)', borderRadius: '12px', padding: '8px 10px',
         });
+        row.innerHTML = `
+            <div style="font-size:30px;width:40px;text-align:center">${emoji}</div>
+            <div style="flex:1">
+              <div style="font-size:16px;font-weight:bold;color:#5a3c22">${name}</div>
+              <div style="font-size:12px;color:#977">${desc}</div>
+            </div>
+            <button style="font-size:14px;font-weight:bold;white-space:nowrap;
+                 padding:8px 12px;border:none;border-radius:10px"></button>`;
+        return row;
     }
 
     _buyShopItem(it) {
@@ -10210,6 +10370,17 @@ export class Game3D {
         it.buy();
         this._showEasterBadge(`🛒 买了 ${it.emoji} ${it.name}！`);
         this._tone(680, 0.1, 'sine', 0.06); this._tone(1020, 0.14, 'sine', 0.05, 0.07);
+        this._renderShopList();
+    }
+
+    _sellShopItem(emoji) {
+        const price = this._sellPrice(emoji);
+        if (price <= 0) return;
+        if (!this._removeFromInventory(emoji)) { this._showEasterBadge('咦？背包里没有这个了'); return; }
+        this.carriedValue = (this.carriedValue || 0) + price;
+        this._renderTreasureChip();
+        this._showEasterBadge(`💰 卖了 ${emoji} ${this._bagItemName(emoji)}，+${price.toLocaleString()}！`);
+        this._tone(720, 0.1, 'sine', 0.06); this._tone(960, 0.14, 'sine', 0.05, 0.07);
         this._renderShopList();
     }
 
@@ -11053,6 +11224,13 @@ export class Game3D {
                 if (e.code === 'KeyB' || e.code === 'Escape') { e.preventDefault(); this._closeShop(); }
                 return;
             }
+            // 仓库开着时：只响应关闭，吞掉其它键（人物不动）
+            if (this._bagOpen) {
+                this.keys[e.code] = false;
+                if (e.code === 'KeyI' || e.code === 'Escape') { e.preventDefault(); this._closeBag(); }
+                return;
+            }
+            if (e.code === 'KeyI') { e.preventDefault(); this._openBag(); }
             if (e.code === 'KeyB') { e.preventDefault(); if (this._nearShop()) this._openShop(); else this._showEasterBadge('🛒 走到广场商店摊前再按 B'); }
             if (e.code === 'KeyC' && this.onOpenCustomize) {
                 e.preventDefault();
@@ -11211,7 +11389,7 @@ export class Game3D {
             this.hintEl.style.cursor = 'pointer';
             this.hintEl.style.userSelect = 'none';
             this.hintEl.title = '点一下 / 按 H 收起或展开';
-            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · B 商店 · M 音乐 · C 换造型 · ESC 释放';
+            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · I 仓库 · B 商店 · M 音乐 · C 换造型 · ESC 释放';
             const tog = document.createElement('span');
             const txt = document.createElement('span');
             txt.style.marginLeft = '8px';
