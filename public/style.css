@@ -352,3 +352,76 @@ body {
 }
 .start-btn:hover { transform: scale(1.06); }
 .start-btn:active { transform: scale(0.97); }
+
+
+/* ===== Compact HUD ===== */
+#game-hint {
+    top: 10px;
+    max-width: min(560px, 56vw);
+    padding: 6px 12px;
+    font-size: 13px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    backdrop-filter: blur(6px);
+}
+
+#quest-chip {
+    top: 48px !important;
+    padding: 5px 11px !important;
+    font-size: 13px !important;
+    letter-spacing: 0 !important;
+    background: rgba(12,18,24,.68) !important;
+    backdrop-filter: blur(6px);
+}
+
+#objective-chip {
+    top: 82px !important;
+    max-width: min(420px, 38vw) !important;
+    padding: 7px 11px !important;
+    font-size: 13px !important;
+    background: rgba(20,16,40,.68) !important;
+    backdrop-filter: blur(6px);
+}
+
+#game-time, #game-weather, #game-stars, #game-greet, #game-season,
+#game-achievements, #game-extract, #game-treasure {
+    right: 10px;
+    padding: 5px 10px;
+    font-size: 12px;
+    opacity: .84;
+    backdrop-filter: blur(5px);
+}
+#game-time { top: 10px; }
+#game-weather { top: 39px; }
+#game-stars { top: 68px; }
+#game-greet { top: 97px; }
+#game-season { top: 126px; }
+#game-achievements { top: 155px; }
+#game-extract {
+    top: 188px;
+    max-width: 360px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#game-treasure { top: 222px; }
+#game-hp { top: 10px; left: 10px; padding: 5px 11px; font-size: 17px; }
+#inventory-bar {
+    bottom: 10px !important;
+    max-width: min(520px, 48vw);
+    padding: 5px 8px !important;
+    gap: 2px !important;
+    overflow: hidden;
+    backdrop-filter: blur(6px);
+}
+
+@media (max-width: 900px) {
+    #game-hint { max-width: 46vw; left: 42%; font-size: 12px; }
+    #game-time, #game-weather, #game-stars, #game-greet, #game-season,
+    #game-achievements { padding: 4px 8px; font-size: 11px; }
+    #game-extract { max-width: 260px; }
+    #objective-chip { max-width: 55vw !important; }
+    #inventory-bar { max-width: 58vw; }
+}
