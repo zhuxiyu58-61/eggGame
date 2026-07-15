@@ -440,6 +440,8 @@ export class Game3D {
         _t('buildPlayer', () => this._buildPlayer());
         _t('setupInput', () => this._setupInput());
         _t('setupStatusUI', () => this._setupStatusUI());
+        this._loadGameState();
+        this._startAutoSave();
 
         this._onResize = this._onResize.bind(this);
         window.addEventListener('resize', this._onResize);
@@ -2076,19 +2078,21 @@ export class Game3D {
 
         // HUD：心愿之物进度（顶部）
         this._questChip = document.createElement('div');
+        this._questChip.id = 'quest-chip';
         Object.assign(this._questChip.style, {
             position: 'fixed', top: '64px', left: '50%',
             transform: 'translateX(-50%)',
             padding: '6px 16px',
             background: 'rgba(0,0,0,0.4)', color: '#fff',
             fontSize: '17px', fontWeight: 'bold', letterSpacing: '1px',
-            borderRadius: '14px', zIndex: '19', pointerEvents: 'none',
+            borderRadius: '14px', zIndex: '19', pointerEvents: 'auto', cursor: 'pointer',
             boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
         });
         document.body.appendChild(this._questChip);
 
         // 当前目标条（左上常驻，随所在区域 + 任务阶段变化）——专治"不知道在干嘛"
         this._objChip = document.createElement('div');
+        this._objChip.id = 'objective-chip';
         Object.assign(this._objChip.style, {
             position: 'fixed', top: '96px', left: '12px',
             padding: '8px 14px', maxWidth: '52vw',
@@ -2100,6 +2104,16 @@ export class Game3D {
         });
         document.body.appendChild(this._objChip);
 
+        this._questHudCollapsed = true;
+        try { this._questHudCollapsed = localStorage.getItem('eggQuestHudCollapsed') !== '0'; } catch (e) {}
+        this._questChip.title = '点击展开或收起任务引导';
+        this._questChip.onclick = (e) => {
+            e.stopPropagation();
+            this._questHudCollapsed = !this._questHudCollapsed;
+            try { localStorage.setItem('eggQuestHudCollapsed', this._questHudCollapsed ? '1' : '0'); } catch (err) {}
+            this._updateQuestHud();
+            this._updateObjective();
+        };
         this._updateQuestHud();
 
         const prog = this._loadProgress();
@@ -2308,12 +2322,15 @@ export class Game3D {
         const marks = this.questItems.map(it =>
             `${it.emoji}${it.stage === 'done' ? '✅' : (it.stage === 'carrying' ? '🎒' : '·')}`
         ).join('　');
-        this._questChip.innerHTML = `心愿之物　${marks}　${this.questCount}/${this.questItems.length}`;
+        this._questChip.innerHTML = this._questHudCollapsed
+            ? `🗺️ 任务 ${this.questCount}/${this.questItems.length} ▾`
+            : `心愿之物　${marks}　${this.questCount}/${this.questItems.length} ▴`;
     }
 
     // 左上当前目标条：按所在区域 + 任务阶段给一句明确的"现在该干嘛"
     _updateObjective() {
         if (!this._objChip) return;
+        this._objChip.style.display = this._questHudCollapsed ? 'none' : 'block';
         let txt;
         if (this._questDone) {
             txt = '🎉 钟楼亮啦！自由探索这个大世界吧～';
@@ -2401,6 +2418,74 @@ export class Game3D {
             setTimeout(() => { el.remove(); this._winEl = null; }, 800);
             this.container?.requestPointerLock?.();
         };
+    }
+
+    _loadGameState() {
+        let save = null;
+        try { save = JSON.parse(localStorage.getItem('eggGameSaveV1')); } catch (e) {}
+        if (!save || typeof save !== 'object') return;
+        const num = (value, fallback, min = 0) => Number.isFinite(Number(value)) ? Math.max(min, Number(value)) : fallback;
+        this.carriedValue = num(save.carriedValue, this.carriedValue || 0);
+        this.warehouseValue = num(save.warehouseValue, this.warehouseValue || 0);
+        this.bankedTotal = num(save.bankedTotal, this.bankedTotal || 0);
+        this.playerHPMax = num(save.playerHPMax, this.playerHPMax || 5, 1);
+        this.playerHP = Math.min(this.playerHPMax, num(save.playerHP, this.playerHPMax));
+        this.playerLivesMax = num(save.playerLivesMax, this.playerLivesMax || 5, 1);
+        this.playerLives = Math.min(this.playerLivesMax, num(save.playerLives, this.playerLives || 3));
+        this._treasureWon = !!save.treasureWon;
+        this._warehouseOwned = new Set(Array.isArray(save.warehouseOwned) ? save.warehouseOwned : []);
+        const allowedWeapons = ['木剑', '小弓', '魔法书', '刀', '枪'];
+        if (allowedWeapons.includes(save.equippedWeapon)) {
+            this.equippedWeapon = save.equippedWeapon;
+            this._buildWeaponModel(save.equippedWeapon);
+            this._renderWeaponChip();
+        }
+        if (save.player && Number.isFinite(save.player.x) && Number.isFinite(save.player.z) && this.player) {
+            const x = Math.max(-155, Math.min(155, save.player.x));
+            const z = Math.max(-155, Math.min(205, save.player.z));
+            this.player.position.set(x, PLAYER_RADIUS * (this.player.scale.x || 1), z);
+        }
+        this._renderTreasureChip();
+        this._renderExtractChip();
+        this._renderPlayerHP();
+        this._renderHearts();
+        this._showEasterBadge('💾 已读取自动存档');
+    }
+
+    _saveGameState() {
+        if (this._destroyed) return;
+        try {
+            const p = this.player?.position;
+            let previous = {};
+            try { previous = JSON.parse(localStorage.getItem('eggGameSaveV1')) || {}; } catch (e) {}
+            if (Object.keys(previous).length) {
+                localStorage.setItem('eggGameSaveBackup', JSON.stringify(previous));
+            }
+            localStorage.setItem('eggGameSaveV1', JSON.stringify({
+                ...previous,
+                version: Math.max(1, Number(previous.version) || 1),
+                savedAt: Date.now(),
+                carriedValue: this.carriedValue || 0,
+                warehouseValue: this.warehouseValue || 0,
+                bankedTotal: this.bankedTotal || 0,
+                equippedWeapon: this.equippedWeapon || null,
+                warehouseOwned: [...(this._warehouseOwned || [])],
+                playerHP: this.playerHP, playerHPMax: this.playerHPMax,
+                playerLives: this.playerLives, playerLivesMax: this.playerLivesMax,
+                treasureWon: !!this._treasureWon,
+                player: p ? { x: p.x, z: p.z } : null,
+            }));
+            this._saveProgress();
+            this._saveInventory();
+            this._saveAchievements();
+        } catch (e) {}
+    }
+
+    _startAutoSave() {
+        this._autoSaveTimer = setInterval(() => this._saveGameState(), 5000);
+        this._onPageHideSave = () => this._saveGameState();
+        window.addEventListener('pagehide', this._onPageHideSave);
+        document.addEventListener('visibilitychange', this._onPageHideSave);
     }
 
     _loadProgress() {
@@ -5524,8 +5609,32 @@ export class Game3D {
         this.extractOpenDur = 40;            // 大鸟停留 40 秒
         this.extractWinGoal = 80000;         // 宝库存满即"富翁蛋"通关
         this.extractMinCarry = 10000;        // 身上至少搜刮到这么多钱,阵门才会开(空手/不够不让走)
+        this.warehouseValue = 0;             // safe gems waiting to be sold
         this._extractCount = parseInt(localStorage.getItem('eggExtractCount') || '0', 10);
         this._extractChip = document.getElementById('game-extract');
+        this._initWarehouseButton();
+    }
+
+    _initWarehouseButton() {
+        if (this._warehouseButton) return;
+        const btn = document.createElement('button');
+        btn.id = 'warehouse-front-button';
+        btn.textContent = '📦 仓库前台';
+        Object.assign(btn.style, {
+            position: 'fixed', left: '16px', top: '170px', zIndex: '16',
+            padding: '11px 17px', border: '2px solid rgba(255,255,255,.75)',
+            borderRadius: '15px', background: 'linear-gradient(135deg,#d99428,#f2c25f)',
+            color: '#fff', fontSize: '17px', fontWeight: 'bold', cursor: 'pointer',
+            boxShadow: '0 5px 16px rgba(0,0,0,.3)', userSelect: 'none',
+        });
+        btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (document.pointerLockElement) document.exitPointerLock?.();
+            this._showWarehouse();
+        };
+        document.body.appendChild(btn);
+        this._warehouseButton = btn;
     }
 
     _updateExtraction(dt) {
@@ -5690,7 +5799,8 @@ export class Game3D {
 
     _renderExtractChip() {
         if (!this._extractChip) return;
-        const goalTxt = `🏦 ${this.bankedTotal.toLocaleString()}/${this.extractWinGoal.toLocaleString()}`;
+        const warehouseTxt = ` &middot; <button id="open-warehouse-btn" style="pointer-events:auto;border:0;border-radius:12px;padding:3px 9px;cursor:pointer;background:#ffe08a;color:#704600;font-weight:bold">🛎️ 前台 &middot; 📦 ${this.warehouseValue.toLocaleString()}</button>`;
+        const goalTxt = `🏦 ${this.bankedTotal.toLocaleString()}/${this.extractWinGoal.toLocaleString()}${warehouseTxt}`;
         const need = Math.max(0, this.extractMinCarry - (this.carriedValue || 0));
         if (this._extractMounted) {
             this._extractChip.innerHTML = `🦅 起飞！带着宝藏飞回家～`;
@@ -5711,6 +5821,11 @@ export class Game3D {
             this._extractChip.innerHTML = `🦅 大鸟来了！快跑向它骑上去（还停 <b>${Math.ceil(this.extractPhaseTimer)}s</b>）`;
             this._extractChip.style.background = 'rgba(176, 124, 255, 0.55)';
         }
+        const warehouseBtn = this._extractChip.querySelector('#open-warehouse-btn');
+        if (warehouseBtn) warehouseBtn.onclick = (e) => {
+            e.stopPropagation();
+            this._showWarehouse();
+        };
     }
 
     _playExtractOpen() {
@@ -5721,13 +5836,121 @@ export class Game3D {
 
     _bankExtraction() {
         const earned = this.carriedValue;
-        this.bankedTotal += earned;
+        this.warehouseValue += earned;
         this._extractCount++;
         try { localStorage.setItem('eggExtractCount', String(this._extractCount)); } catch (e) {}
         this.carriedValue = 0;
         this._renderTreasureChip();
         this._unlockAchievement('first_extract');
         if (this._extractCount >= 3) this._unlockAchievement('three_extract');
+        this._tone(720, 0.2, 'sine', 0.06);
+        this._showWarehouse();
+        this.extractPhase = 'closed';
+        this.extractPhaseTimer = 45 + Math.random() * 25;
+        this.extractStandT = 0;
+        this._renderExtractChip();
+    }
+
+    _showWarehouse() {
+        if (!this._warehouseEl) {
+            const overlay = document.createElement('div');
+            overlay.id = 'warehouse-panel';
+            Object.assign(overlay.style, {
+                position: 'fixed', inset: '0', zIndex: '40', display: 'none',
+                alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(20,12,6,0.62)', pointerEvents: 'auto',
+            });
+            overlay.innerHTML = `
+              <div style="width:min(800px,calc(100vw - 28px));padding:22px;border:3px solid #e3b85f;border-radius:22px;background:linear-gradient(160deg,#fff9e8,#f3ddb0);box-shadow:0 16px 50px rgba(0,0,0,.45);color:#5b3a18">
+                <div style="font-size:27px;font-weight:900;text-align:center;margin-bottom:16px">📦 仓库与前台 🛎️</div>
+                <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:stretch">
+                  <section style="padding:18px;border-radius:17px;background:rgba(255,255,255,.58);border:2px solid #dfbd78;text-align:center;display:flex;flex-direction:column">
+                    <div style="font-size:40px">📦</div>
+                    <div style="font-size:23px;font-weight:900">左边 &middot; 仓库</div>
+                    <div style="font-size:14px;color:#8a663d;margin:7px 0 16px">安全存放带回来的宝石</div>
+                    <div id="warehouse-value" style="font-size:28px;font-weight:900;color:#c47b12;margin:auto 0 20px"></div>
+                    <button id="warehouse-sell" style="width:100%;padding:13px;border:0;border-radius:14px;background:#e99a25;color:white;font-size:18px;font-weight:bold;cursor:pointer">💰 一键卖出</button>
+                  </section>
+                  <section style="padding:18px;border-radius:17px;background:rgba(255,255,255,.72);border:2px solid #d5a85b">
+                    <div style="font-size:23px;font-weight:900;text-align:center">右边 &middot; 前台</div>
+                    <div style="font-size:14px;color:#8a663d;text-align:center;margin:7px 0 10px">用卖宝石得到的金币购买装备</div>
+                    <div id="warehouse-gold" style="font-size:18px;font-weight:bold;color:#8b5a18;margin-bottom:10px;text-align:center"></div>
+                    <div id="warehouse-shop" style="display:grid;grid-template-columns:1fr;gap:8px;text-align:left"></div>
+                  </section>
+                </div>
+                <button id="warehouse-cancel" style="margin-top:15px;width:100%;padding:11px;border:2px solid #bda477;border-radius:14px;background:#fffaf0;color:#765630;font-size:17px;font-weight:bold;cursor:pointer">取消</button>
+              </div>`;
+            overlay.querySelector('#warehouse-sell').onclick = () => this._sellWarehouse();
+            overlay.querySelector('#warehouse-cancel').onclick = () => this._hideWarehouse();
+            overlay.addEventListener('click', e => { if (e.target === overlay) this._hideWarehouse(); });
+            document.body.appendChild(overlay);
+            this._warehouseEl = overlay;
+        }
+        this._warehouseEl.querySelector('#warehouse-value').textContent = `💎 待售宝石 ${this.warehouseValue.toLocaleString()}`;
+        this._renderWarehouseShop();
+        this._warehouseEl.style.display = 'flex';
+    }
+
+    _warehouseShopItems() {
+        return [
+            { id: 'helmet', emoji: '🪖', name: '头盔', price: 4000, desc: '生命上限 +1', buy: () => this._equipWarehouseArmor('helmet') },
+            { id: 'chest', emoji: '🦺', name: '胸甲', price: 8000, desc: '生命上限 +2', buy: () => this._equipWarehouseArmor('chest') },
+            { id: 'gun', emoji: '🔫', name: '枪', price: 12000, desc: '高速远程弹道', buy: () => this._equipWeapon('枪') },
+            { id: 'knife', emoji: '🔪', name: '刀', price: 5000, desc: '近战伤害 3', buy: () => this._equipWeapon('刀') },
+        ];
+    }
+
+    _renderWarehouseShop() {
+        if (!this._warehouseEl) return;
+        this._warehouseOwned = this._warehouseOwned || new Set();
+        this._warehouseEl.querySelector('#warehouse-gold').textContent = `💰 可用金币 ${this.bankedTotal.toLocaleString()}`;
+        const list = this._warehouseEl.querySelector('#warehouse-shop');
+        list.innerHTML = '';
+        for (const item of this._warehouseShopItems()) {
+            const owned = this._warehouseOwned.has(item.id);
+            const row = document.createElement('div');
+            row.style.cssText = 'background:rgba(255,255,255,.72);border-radius:12px;padding:9px;display:flex;gap:8px;align-items:center';
+            row.innerHTML = `<span style="font-size:27px">${item.emoji}</span><span style="flex:1"><b>${item.name}</b><small style="display:block;color:#8a745a">${item.desc}</small></span><button style="border:0;border-radius:9px;padding:7px;background:${owned ? '#9bbf8f' : '#e8a23c'};color:white;font-weight:bold;cursor:${owned ? 'default' : 'pointer'}">${owned ? '已拥有' : '💰 '+item.price.toLocaleString()}</button>`;
+            const btn = row.querySelector('button');
+            btn.disabled = owned;
+            if (!owned) btn.onclick = () => this._buyWarehouseItem(item);
+            list.appendChild(row);
+        }
+    }
+
+    _buyWarehouseItem(item) {
+        if (this.bankedTotal < item.price) {
+            this._showEasterBadge('💰 金币不够，先卖出仓库里的宝石吧');
+            this._tone(160, 0.18, 'sawtooth', 0.05);
+            return;
+        }
+        this.bankedTotal -= item.price;
+        this._warehouseOwned.add(item.id);
+        item.buy();
+        this._showEasterBadge(`🛎️ 购买了 ${item.emoji} ${item.name}！`);
+        this._tone(680, 0.1, 'sine', 0.06);
+        this._renderWarehouseShop();
+        this._renderExtractChip();
+    }
+
+    _equipWarehouseArmor(kind) {
+        const bonus = kind === 'helmet' ? 1 : 2;
+        this.playerHPMax += bonus;
+        this.playerHP += bonus;
+        this._renderPlayerHP();
+    }
+
+    _hideWarehouse() {
+        if (this._warehouseEl) this._warehouseEl.style.display = 'none';
+    }
+
+    _sellWarehouse() {
+        const sold = this.warehouseValue || 0;
+        if (!sold) return this._renderWarehouseShop();
+        this.warehouseValue = 0;
+        this.bankedTotal += sold;
+        this._renderExtractChip();
+        this._renderWarehouseShop();
         this._launchFirework();
         this._launchFirework();
         this._playWin();
@@ -5735,15 +5958,10 @@ export class Game3D {
         if (won) {
             this._triggerTreasureWin();
         } else if (this.statusEl) {
-            this.statusEl.innerHTML = `✨ <b>大鸟驮着宝藏飞回家啦！</b><br><small style="font-size:18px">这趟带走 💰 ${earned.toLocaleString()} · 宝库已存 ${this.bankedTotal.toLocaleString()} / ${this.extractWinGoal.toLocaleString()}</small>`;
+            this.statusEl.innerHTML = `💰 <b>宝石全部卖出啦！</b><br><small style="font-size:18px">本次卖出 ${sold.toLocaleString()} &middot; 宝库已有 ${this.bankedTotal.toLocaleString()} / ${this.extractWinGoal.toLocaleString()}</small>`;
             this.statusEl.style.display = 'block';
             setTimeout(() => { if (this.statusEl) this.statusEl.style.display = 'none'; }, 3000);
         }
-        // 立刻进入下一个等待周期（不冻结游戏，继续搜刮）
-        this.extractPhase = 'closed';
-        this.extractPhaseTimer = 45 + Math.random() * 25;
-        this.extractStandT = 0;
-        this._renderExtractChip();
     }
 
     _triggerTreasureWin() {
@@ -6515,6 +6733,8 @@ export class Game3D {
     _weaponCfg() {
         switch (this.equippedWeapon) {
             case '木剑':   return { kind: 'melee',  dmg: 2, range: 2.7, knock: 1.9, label: '木剑' };
+            case '刀':     return { kind: 'melee',  dmg: 3, range: 2.9, knock: 2.1, label: '刀' };
+            case '枪':     return { kind: 'ranged', dmg: 3, speed: 42, proj: 'bullet', label: '枪' };
             case '小弓':   return { kind: 'ranged', dmg: 1, speed: 30, proj: 'arrow', label: '小弓' };
             case '魔法书': return { kind: 'ranged', dmg: 2, speed: 22, proj: 'magic', label: '魔法书' };
             default:       return { kind: 'melee',  dmg: 1, range: 2.2, knock: 1.5, label: '拳头' };
@@ -6565,6 +6785,10 @@ export class Game3D {
             mesh = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.7, 6), new THREE.MeshToonMaterial({ color: 0x8a5a2e }));
             addOutline(mesh, 0.02);
             this._tone(520, 0.1, 'triangle', 0.05);
+        } else if (w.proj === 'bullet') {
+            mesh = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffd34e }));
+            this._tone(180, 0.06, 'square', 0.08);
+            this._tone(90, 0.08, 'sawtooth', 0.04, 0.02);
         } else {
             mesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff6fe0, transparent: true, opacity: 0.92, depthWrite: false }));
             this._tone(780, 0.12, 'sine', 0.05); this._tone(1040, 0.12, 'sine', 0.04, 0.06);
@@ -6596,7 +6820,7 @@ export class Game3D {
                 if (d < 1.2) {
                     pr.hitSet.add(m);
                     this._hitMonster(m, pr.dmg, 1.4, pr.mesh.position.x - pr.vx, pr.mesh.position.z - pr.vz);
-                    if (pr.proj === 'arrow') { consumed = true; break; }   // 箭单体即消失；魔法弹穿透
+                    if (pr.proj === 'arrow' || pr.proj === 'bullet') { consumed = true; break; }   // 箭单体即消失；魔法弹穿透
                 }
             }
             if (consumed || pr.life <= 0) {
@@ -6625,8 +6849,8 @@ export class Game3D {
         }
         if (!this.player) return;
         const g = new THREE.Group();
-        if (name === '木剑') {
-            const blade = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.85, 0.02), new THREE.MeshToonMaterial({ color: 0xd2d8df }));
+        if (name === '木剑' || name === '刀') {
+            const blade = new THREE.Mesh(new THREE.BoxGeometry(name === '刀' ? 0.11 : 0.07, name === '刀' ? 0.72 : 0.85, 0.02), new THREE.MeshToonMaterial({ color: name === '刀' ? 0xe8eef5 : 0xd2d8df }));
             blade.position.y = 0.6; addOutline(blade, 0.02); g.add(blade);
             const guard = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.06, 0.07), new THREE.MeshToonMaterial({ color: 0x8a6a3a }));
             guard.position.y = 0.16; g.add(guard);
@@ -6639,6 +6863,12 @@ export class Game3D {
             const str = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.66, 4), new THREE.MeshBasicMaterial({ color: 0xeeeeee }));
             g.add(str);
             g.rotation.y = Math.PI / 2; g.rotation.x = 0.2;
+        } else if (name === '枪') {
+            const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.7), new THREE.MeshToonMaterial({ color: 0x30343b }));
+            barrel.position.z = -0.25; addOutline(barrel, 0.02); g.add(barrel);
+            const grip = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.3, 0.13), new THREE.MeshToonMaterial({ color: 0x76502f }));
+            grip.position.set(0, -0.17, 0); grip.rotation.x = -0.25; g.add(grip);
+            g.rotation.y = Math.PI;
         } else { // 魔法书
             const book = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.09), new THREE.MeshToonMaterial({ color: 0xd23a3a }));
             addOutline(book, 0.02); g.add(book);
@@ -6664,7 +6894,7 @@ export class Game3D {
             });
             document.body.appendChild(chip);
         }
-        const emoji = { '木剑': '🗡️', '小弓': '🏹', '魔法书': '📕' }[this.equippedWeapon] || '👊';
+        const emoji = { '木剑': '🗡️', '刀': '🔪', '枪': '🔫', '小弓': '🏹', '魔法书': '📕' }[this.equippedWeapon] || '👊';
         chip.textContent = `${emoji} ${this.equippedWeapon || '拳头'}`;
     }
 
@@ -7172,12 +7402,17 @@ export class Game3D {
             document.body.appendChild(bar);
         }
         const label = '<span style="font-size:16px;margin-right:4px">🎒</span>';
-        bar.innerHTML = label + (this.inventory.length === 0
-            ? '<span style="color:#ccc;font-size:14px">仓库（点开看看）</span>'
-            : this.inventory.map(e =>
-                `<span style="font-size:24px;display:inline-block;width:30px;text-align:center;">${e}</span>`
-            ).join(''));
+        if (this.inventory.length === 0) {
+            bar.innerHTML = label + '<span style="color:#ccc;font-size:13px">仓库（点开看看）</span>';
+        } else {
+            const grouped = new Map();
+            for (const emoji of this.inventory) grouped.set(emoji, (grouped.get(emoji) || 0) + 1);
+            bar.innerHTML = label + [...grouped.entries()].map(([emoji, count]) =>
+                `<span style="font-size:20px;display:inline-flex;align-items:center;gap:1px;padding:0 3px">${emoji}${count > 1 ? `<small style="font-size:11px;color:#fff">×${count}</small>` : ''}</span>`
+            ).join('');
+        }
     }
+
 
     // ========= 仓库：查看拾到的宝石 / 道具 =========
     _recordGem(loot) {
@@ -11396,8 +11631,8 @@ export class Game3D {
             this.hintEl.textContent = '';
             this.hintEl.appendChild(tog);
             this.hintEl.appendChild(txt);
-            let collapsed = false;
-            try { collapsed = localStorage.getItem('eggHintCollapsed') === '1'; } catch (e) {}
+            let collapsed = true;
+            try { collapsed = localStorage.getItem('eggHintCollapsed') !== '0'; } catch (e) {}
             const apply = () => {
                 tog.textContent = collapsed ? '❔ 操作' : '操作帮助 ▴';
                 tog.style.opacity = '0.9';
@@ -11918,6 +12153,10 @@ export class Game3D {
     }
 
     destroy() {
+        this._saveGameState();
+        clearInterval(this._autoSaveTimer);
+        window.removeEventListener('pagehide', this._onPageHideSave);
+        document.removeEventListener('visibilitychange', this._onPageHideSave);
         this._destroyed = true;
         cancelAnimationFrame(this.animId);
         window.removeEventListener('keydown', this._onKeyDown);

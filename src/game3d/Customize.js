@@ -13,7 +13,25 @@ export class Customize {
         this.container = container;
         this.onStart = onStart;
         this.style = loadStyle();
+        this.resumeInfo = this._getResumeInfo();
         this._render();
+    }
+
+    _getResumeInfo() {
+        try {
+            const save = JSON.parse(localStorage.getItem('eggGameSaveV1')) || null;
+            const progress = JSON.parse(localStorage.getItem('eggGameProgress')) || {};
+            const achievements = JSON.parse(localStorage.getItem('eggGameAchievements')) || [];
+            const inventory = JSON.parse(localStorage.getItem('eggGameInventory')) || [];
+            const hasProgress = !!save || (progress.stars || 0) > 0 || (progress.quest || []).length > 0 || achievements.length > 0 || inventory.length > 0;
+            if (!hasProgress) return null;
+            return {
+                savedAt: save?.savedAt || null,
+                stars: progress.stars || 0,
+                quests: (progress.quest || []).length,
+                achievements: achievements.length,
+            };
+        } catch (e) { return null; }
     }
 
     _render() {
@@ -44,7 +62,13 @@ export class Customize {
                     <label>头饰</label>
                     <div class="options" id="headwear-options"></div>
                 </div>
-                <button class="start-btn" id="start-btn">开始 3D 冒险 ▶</button>
+                ${this.resumeInfo ? `
+                  <div style="margin:10px 0;padding:10px 14px;border-radius:14px;background:rgba(80,170,100,.14);color:#39734a;font-size:14px">
+                    💾 已找到上次存档 &middot; ⭐ ${this.resumeInfo.stars} &middot; 🏅 ${this.resumeInfo.achievements} &middot; 🗺️ ${this.resumeInfo.quests}
+                  </div>
+                  <button class="start-btn" id="continue-btn" style="background:linear-gradient(90deg,#53b96d,#8bd35e);margin-bottom:8px">继续上次冒险 ▶</button>
+                ` : ''}
+                <button class="start-btn" id="start-btn">${this.resumeInfo ? '保存装扮并继续' : '开始 3D 冒险 ▶'}</button>
             </div>
         `;
 
@@ -56,12 +80,15 @@ export class Customize {
 
         this._canvas = document.getElementById('preview-canvas');
 
-        document.getElementById('start-btn').onclick = () => {
-            saveStyle(this.style);
+        const enterGame = (saveCurrentStyle) => {
+            if (saveCurrentStyle) saveStyle(this.style);
             this.container.style.display = 'none';
             this.container.innerHTML = '';
             this.onStart();
         };
+        document.getElementById('start-btn').onclick = () => enterGame(true);
+        const continueBtn = document.getElementById('continue-btn');
+        if (continueBtn) continueBtn.onclick = () => enterGame(false);
 
         this._updatePreview();
     }
