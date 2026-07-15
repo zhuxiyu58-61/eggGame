@@ -2077,19 +2077,21 @@ export class Game3D {
 
         // HUD：心愿之物进度（顶部）
         this._questChip = document.createElement('div');
+        this._questChip.id = 'quest-chip';
         Object.assign(this._questChip.style, {
             position: 'fixed', top: '64px', left: '50%',
             transform: 'translateX(-50%)',
             padding: '6px 16px',
             background: 'rgba(0,0,0,0.4)', color: '#fff',
             fontSize: '17px', fontWeight: 'bold', letterSpacing: '1px',
-            borderRadius: '14px', zIndex: '19', pointerEvents: 'none',
+            borderRadius: '14px', zIndex: '19', pointerEvents: 'auto', cursor: 'pointer',
             boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
         });
         document.body.appendChild(this._questChip);
 
         // 当前目标条（左上常驻，随所在区域 + 任务阶段变化）——专治"不知道在干嘛"
         this._objChip = document.createElement('div');
+        this._objChip.id = 'objective-chip';
         Object.assign(this._objChip.style, {
             position: 'fixed', top: '96px', left: '12px',
             padding: '8px 14px', maxWidth: '52vw',
@@ -2101,6 +2103,16 @@ export class Game3D {
         });
         document.body.appendChild(this._objChip);
 
+        this._questHudCollapsed = true;
+        try { this._questHudCollapsed = localStorage.getItem('eggQuestHudCollapsed') !== '0'; } catch (e) {}
+        this._questChip.title = '点击展开或收起任务引导';
+        this._questChip.onclick = (e) => {
+            e.stopPropagation();
+            this._questHudCollapsed = !this._questHudCollapsed;
+            try { localStorage.setItem('eggQuestHudCollapsed', this._questHudCollapsed ? '1' : '0'); } catch (err) {}
+            this._updateQuestHud();
+            this._updateObjective();
+        };
         this._updateQuestHud();
 
         const prog = this._loadProgress();
@@ -2309,12 +2321,15 @@ export class Game3D {
         const marks = this.questItems.map(it =>
             `${it.emoji}${it.stage === 'done' ? '✅' : (it.stage === 'carrying' ? '🎒' : '·')}`
         ).join('　');
-        this._questChip.innerHTML = `心愿之物　${marks}　${this.questCount}/${this.questItems.length}`;
+        this._questChip.innerHTML = this._questHudCollapsed
+            ? `🗺️ 任务 ${this.questCount}/${this.questItems.length} ▾`
+            : `心愿之物　${marks}　${this.questCount}/${this.questItems.length} ▴`;
     }
 
     // 左上当前目标条：按所在区域 + 任务阶段给一句明确的"现在该干嘛"
     _updateObjective() {
         if (!this._objChip) return;
+        this._objChip.style.display = this._questHudCollapsed ? 'none' : 'block';
         let txt;
         if (this._questDone) {
             txt = '🎉 钟楼亮啦！自由探索这个大世界吧～';
@@ -7366,11 +7381,15 @@ export class Game3D {
             });
             document.body.appendChild(bar);
         }
-        bar.innerHTML = this.inventory.length === 0
-            ? '<span style="color:#aaa;font-size:14px">背包空空</span>'
-            : this.inventory.map(e =>
-                `<span style="font-size:24px;display:inline-block;width:30px;text-align:center;">${e}</span>`
-            ).join('');
+        if (this.inventory.length === 0) {
+            bar.innerHTML = '<span style="color:#aaa;font-size:13px">🎒 背包空</span>';
+            return;
+        }
+        const grouped = new Map();
+        for (const emoji of this.inventory) grouped.set(emoji, (grouped.get(emoji) || 0) + 1);
+        bar.innerHTML = [...grouped.entries()].map(([emoji, count]) =>
+            `<span style="font-size:20px;display:inline-flex;align-items:center;gap:1px;padding:0 3px">${emoji}${count > 1 ? `<small style="font-size:11px;color:#fff">×${count}</small>` : ''}</span>`
+        ).join('');
     }
 
     // ========= 成就系统 =========
@@ -11413,8 +11432,8 @@ export class Game3D {
             this.hintEl.textContent = '';
             this.hintEl.appendChild(tog);
             this.hintEl.appendChild(txt);
-            let collapsed = false;
-            try { collapsed = localStorage.getItem('eggHintCollapsed') === '1'; } catch (e) {}
+            let collapsed = true;
+            try { collapsed = localStorage.getItem('eggHintCollapsed') !== '0'; } catch (e) {}
             const apply = () => {
                 tog.textContent = collapsed ? '❔ 操作' : '操作帮助 ▴';
                 tog.style.opacity = '0.9';
