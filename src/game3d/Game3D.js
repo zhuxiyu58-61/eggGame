@@ -11259,7 +11259,7 @@ export class Game3D {
         this.animRoot.add(mouth);
 
         // ===== 头饰 =====
-        this._addAccessory(this.style.headwear, hairTop, headR);
+        this._addAccessory(this.style.headwear, hairTop, headR, this.style.hairStyle);
 
         // ===== 探险小书包（背后，呼应"进入蛋世界探险的女孩"）=====
         const bagHex = 0xc8743a, bagDark = darkenHex(0xc8743a, 0.7);
@@ -11357,38 +11357,48 @@ export class Game3D {
         // short：只有后发+刘海+侧发，已够
     }
 
-    _addAccessory(type, top, hr) {
+    _addAccessory(type, top, hr, hairStyle) {
         // 装饰加在 animRoot 里，跟着挤压拉伸一起动；top = 蛋头顶，hr = 蛋头半径
+        // 麻花辫造型时，除皇冠外的头饰在左右两条辫子上各放一个。
+        const onBraid = hairStyle === 'braids' && type !== 'crown';
+        const accessoryY = onBraid ? top - hr * 1.35 : top + hr * 0.06;
+        const accessoryZ = onBraid ? -hr * 0.05 : 0;
+        const accessoryXs = onBraid ? [-hr * 0.92, hr * 0.92] : [0];
         if (type === 'bow') {
             const bowMat = new THREE.MeshToonMaterial({ color: 0xff3a78 });
-            const left = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
-            left.position.set(-hr * 0.26, top + hr * 0.06, 0);
-            left.rotation.z = -0.25;
-            left.castShadow = true;
-            this.animRoot.add(left);
-            const right = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
-            right.position.set(hr * 0.26, top + hr * 0.06, 0);
-            right.rotation.z = 0.25;
-            right.castShadow = true;
-            this.animRoot.add(right);
-            const knot = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 12, 12), bowMat);
-            knot.position.y = top + hr * 0.06;
-            this.animRoot.add(knot);
+            for (const accessoryX of accessoryXs) {
+                const left = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
+                left.position.set(accessoryX - hr * 0.26, accessoryY, accessoryZ);
+                left.rotation.z = -0.25;
+                left.castShadow = true;
+                this.animRoot.add(left);
+                const right = new THREE.Mesh(new THREE.BoxGeometry(hr * 0.5, hr * 0.46, hr * 0.22), bowMat);
+                right.position.set(accessoryX + hr * 0.26, accessoryY, accessoryZ);
+                right.rotation.z = 0.25;
+                right.castShadow = true;
+                this.animRoot.add(right);
+                const knot = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 12, 12), bowMat);
+                knot.position.set(accessoryX, accessoryY, accessoryZ);
+                this.animRoot.add(knot);
+            }
         } else if (type === 'flower') {
-            // 侧戴一朵小花（5 片花瓣 + 黄花心），别在头侧更像女孩发饰
             const petalMat = new THREE.MeshToonMaterial({ color: 0xff7ab0 });
             const coreMat = new THREE.MeshToonMaterial({ color: 0xffe066 });
-            const fx = hr * 0.78, fy = top - hr * 0.25, fz = -hr * 0.2;
-            for (let i = 0; i < 5; i++) {
-                const a = (i / 5) * Math.PI * 2;
-                const petal = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 8, 8), petalMat);
-                petal.scale.set(1, 0.5, 1);
-                petal.position.set(fx + Math.cos(a) * hr * 0.18, fy + Math.sin(a) * hr * 0.18, fz);
-                this.animRoot.add(petal);
+            const fy = onBraid ? accessoryY : top - hr * 0.25;
+            const fz = onBraid ? accessoryZ - hr * 0.18 : -hr * 0.2;
+            const flowerXs = onBraid ? accessoryXs : [hr * 0.78];
+            for (const fx of flowerXs) {
+                for (let i = 0; i < 5; i++) {
+                    const a = (i / 5) * Math.PI * 2;
+                    const petal = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.16, 8, 8), petalMat);
+                    petal.scale.set(1, 0.5, 1);
+                    petal.position.set(fx + Math.cos(a) * hr * 0.18, fy + Math.sin(a) * hr * 0.18, fz);
+                    this.animRoot.add(petal);
+                }
+                const core = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.12, 10, 8), coreMat);
+                core.position.set(fx, fy, fz);
+                this.animRoot.add(core);
             }
-            const core = new THREE.Mesh(new THREE.SphereGeometry(hr * 0.12, 10, 8), coreMat);
-            core.position.set(fx, fy, fz);
-            this.animRoot.add(core);
         } else if (type === 'crown') {
             const crownMat = new THREE.MeshToonMaterial({ color: 0xffd700 });
             const band = new THREE.Mesh(

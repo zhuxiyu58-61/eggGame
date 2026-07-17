@@ -233,7 +233,13 @@ function drawGirl(ctx, s) {
     if (s.headwear && s.headwear !== 'none') {
         const emoji = s.headwear === 'bow' ? '🎀' : (s.headwear === 'flower' ? '🌸' : '👑');
         ctx.font = '34px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        const ty = s.hairStyle === 'bun' ? hy - hR - 20 : hy - hR - 6;
-        ctx.fillText(emoji, cx, ty);
+        const onBraid = s.hairStyle === 'braids' && s.headwear !== 'crown';
+        const ty = onBraid ? hy + 50 : (s.hairStyle === 'bun' ? hy - hR - 20 : hy - hR - 6);
+        if (onBraid) {
+            ctx.fillText(emoji, cx - 44, ty);
+            ctx.fillText(emoji, cx + 44, ty);
+        } else {
+            ctx.fillText(emoji, cx, ty);
+        }
     }
 }
