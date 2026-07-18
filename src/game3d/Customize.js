@@ -139,7 +139,23 @@ export class Customize {
 // ===== 2D 女孩肖像预览：随选择实时变 =====
 function circle(ctx, x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
 function ell(ctx, x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
-function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill(); }
+// 圆角矩形：ctx.roundRect 要 Safari 16.4+，老 iPad 上没有会抛异常把整幅画中断掉，
+// 所以自己用 arcTo 拼一个等价路径兜底
+function rrect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) {
+        ctx.roundRect(x, y, w, h, r);
+    } else {
+        const k = Math.min(r, w / 2, h / 2);
+        ctx.moveTo(x + k, y);
+        ctx.arcTo(x + w, y, x + w, y + h, k);
+        ctx.arcTo(x + w, y + h, x, y + h, k);
+        ctx.arcTo(x, y + h, x, y, k);
+        ctx.arcTo(x, y, x + w, y, k);
+        ctx.closePath();
+    }
+    ctx.fill();
+}
 function darken(hex, f) {
     const n = parseInt(hex.replace('#', ''), 16);
     const r = ((n >> 16) & 255) * f, g = ((n >> 8) & 255) * f, b = (n & 255) * f;

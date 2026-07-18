@@ -564,6 +564,9 @@ export class Game3D {
         //    比同步 renderer.compile() 串行快得多；await 它，确保进游戏前场景材质 program 全就绪。
         const _c0 = performance.now();
         this._updateCamera();   // 把相机摆到真实游戏机位，预热渲染才有代表性
+        // 先裁灯再编译：否则这里按 75 盏点光源编一遍，iPad 上必然超 uniform 上限编译失败，
+        // 白等一次还得等运行时灯数变化后重编
+        this._cullPointLights();
         if (this.renderer.compileAsync) {
             try { await this.renderer.compileAsync(this.scene, this.camera); } catch (e) {}
         } else {
@@ -575,20 +578,31 @@ export class Game3D {
         //    "首帧合成"那一下同步编译（弱 GPU 上十几秒看着像卡死）。这里主动跑一帧合成渲染，
         //    把这些 program 也编完。此刻有加载页盖着，编译卡顿看不见。
         const _r0 = performance.now();
-        try { this.composer.render(); } catch (e) {}
+        try { this._render(); } catch (e) { if (this.DBG.on) this._dbgLog('WARMUP', String(e)); }
         if (window.__PERF__) console.log(`[PERF]   warmup.composite ${(performance.now() - _r0).toFixed(1)}ms`);
 
         cleanup();
     }
 
     _initThree() {
+        // ===== 临时诊断开关（URL 查询串）：iPad/Safari 上二分排查渲染异常用 =====
+        // ?nopost=1 跳过整条后处理链 / ?nobloom=1 去 bloom / ?nograde=1 去调色
+        // ?noshadow=1 关阴影 / ?notone=1 关 ACES 色调映射 / ?dbg=1 屏幕上显示错误
+        const _q = new URLSearchParams(location.search);
+        this.DBG = {
+            nopost: _q.has('nopost'), nobloom: _q.has('nobloom'), nograde: _q.has('nograde'),
+            noshadow: _q.has('noshadow'), notone: _q.has('notone'), on: _q.has('dbg'),
+        };
+        if (this.DBG.on) this._initDebugOverlay();
+
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));  // Retina 屏限到 1.5，省 2-4 倍片元
-        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.enabled = !this.DBG.noshadow;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMapping = this.DBG.notone ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.1;
+        if (this.DBG.on) this._dbgReport(this.renderer);
         this.container.appendChild(this.renderer.domElement);
 
         this.scene = new THREE.Scene();
@@ -692,7 +706,7 @@ export class Game3D {
             0.5,   // radius
             0.82   // threshold（收紧：白天的白云/亮天不晕染，夜里灯火和星星照常发光）
         );
-        this.composer.addPass(this.bloomPass);
+        if (!this.DBG.nobloom) this.composer.addPass(this.bloomPass);
         // 色彩分级：饱和度提升 + 轻 S 曲线 + 阴影偏冷/高光偏暖 + 暗角（一个全屏 pass，开销极小）
         this.gradePass = new ShaderPass({
             uniforms: {
@@ -728,8 +742,94 @@ export class Game3D {
                 }
             `,
         });
-        this.composer.addPass(this.gradePass);
+        if (!this.DBG.nograde) this.composer.addPass(this.gradePass);
         this.composer.addPass(new OutputPass());
+    }
+
+    // ===== 点光源裁剪：只让离玩家最近的几盏"进"场景 =====
+    // iPad 的 MAX_FRAGMENT_UNIFORM_VECTORS 只有 224（桌面 1024），而场景里常驻 75 盏 PointLight，
+    // 每盏约占 3 个 uniform vector——光点光源就把预算吃穿了，MeshToonMaterial 编译失败→物体全黑。
+    // 注意：把 intensity 设成 0 没用，灯还在场景里就照样占 uniform；必须 visible=false，
+    // 因为 three 的 projectObject 在最开头就 `if (object.visible === false) return`，这样才不计数。
+    _cullPointLights() {
+        const MAX = 8;            // 8×3=24 vec4，离 224 的预算很远，留足安全余量
+        const REBUILD = 30;         // 灯是动态生成的（宝箱/流星等），隔 30 帧重扫一次场景
+        const EVERY = 6;            // 每 6 帧重排一次，够跟上走路速度了
+
+        const first = !this._pointLights;
+        this._lightTick = ((this._lightTick || 0) + 1) % EVERY;
+        if (!first && this._lightTick !== 0) return;
+
+        this._lightScan = ((this._lightScan || 0) + 1) % (REBUILD / EVERY);
+        if (first || this._lightScan === 0) {
+            this._pointLights = [];
+            this.scene.traverse(o => { if (o.isPointLight) this._pointLights.push(o); });
+        }
+
+        const lights = this._pointLights;
+        if (lights.length <= MAX) return;
+
+        const p = this.player ? this.player.position : this.camera.position;  // 预热时玩家可能还没建
+        const v = this._lightTmp || (this._lightTmp = new THREE.Vector3());
+        for (const L of lights) {
+            // 灯挂在房子/宝箱等 group 下，得取世界坐标
+            L.getWorldPosition(v);
+            // 灭着的灯（intensity 0）直接排到最后，别占名额
+            L.__d = L.intensity > 0 ? v.distanceToSquared(p) : Infinity;
+        }
+        lights.sort((a, b) => a.__d - b.__d);
+        for (let i = 0; i < lights.length; i++) {
+            lights[i].visible = i < MAX && lights[i].__d !== Infinity;
+        }
+    }
+
+    // 出图：?nopost=1 时绕过整条后处理链，直接渲染（诊断用）
+    _render() {
+        if (this.DBG.nopost) this.renderer.render(this.scene, this.camera);
+        else this.composer.render();
+    }
+
+    // ===== 临时诊断：把错误显示在屏幕上（iPad 上没法开控制台）=====
+    _initDebugOverlay() {
+        const box = document.createElement('div');
+        box.id = 'dbg-overlay';
+        box.style.cssText = 'position:fixed;left:0;bottom:0;max-height:45vh;width:100%;overflow:auto;' +
+            'background:rgba(0,0,0,.82);color:#0f0;font:11px/1.45 monospace;padding:8px;z-index:99999;' +
+            'white-space:pre-wrap;word-break:break-all';
+        document.body.appendChild(box);
+        this._dbgBox = box;
+        // 这几条是已知无害噪音，会把真正的报错刷没，直接丢掉
+        const NOISE = /is not a property of THREE\.|has been deprecated/;
+        const seen = new Map();
+        const log = (tag, msg) => {
+            if (NOISE.test(msg)) return;
+            const n = (seen.get(msg) || 0) + 1;   // 同一条只显示一次，之后累加计数
+            seen.set(msg, n);
+            if (n > 1) return;
+            box.textContent += `[${tag}] ${msg}\n`;
+            box.scrollTop = box.scrollHeight;
+        };
+        this._dbgLog = log;
+        window.addEventListener('error', e => log('ERR', `${e.message} @${e.filename}:${e.lineno}`));
+        window.addEventListener('unhandledrejection', e => log('REJECT', String(e.reason)));
+        const warn = console.warn.bind(console), err = console.error.bind(console);
+        console.warn = (...a) => { log('WARN', a.join(' ')); warn(...a); };
+        console.error = (...a) => { log('ERROR', a.join(' ')); err(...a); };
+    }
+
+    _dbgReport(renderer) {
+        const gl = renderer.getContext();
+        const dbgInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        const flags = Object.entries(this.DBG).filter(([, v]) => v).map(([k]) => k).join(',') || '(none)';
+        this._dbgLog('INFO', [
+            `three=${THREE.REVISION} webgl2=${renderer.capabilities.isWebGL2}`,
+            `gpu=${dbgInfo ? gl.getParameter(dbgInfo.UNMASKED_RENDERER_WEBGL) : '?'}`,
+            `dpr=${window.devicePixelRatio} size=${window.innerWidth}x${window.innerHeight}`,
+            `maxTex=${gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS)} maxFragUnif=${gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS)}`,
+            `maxVary=${gl.getParameter(gl.MAX_VARYING_VECTORS)} precisionHighp=${renderer.capabilities.precision}`,
+            `colorBufFloat=${!!gl.getExtension('EXT_color_buffer_float')} floatBlend=${!!gl.getExtension('EXT_float_blend')}`,
+            `flags=${flags}`,
+        ].join('\n       '));
     }
 
     _createSkyDome() {
@@ -11544,10 +11644,10 @@ export class Game3D {
         ui.appendChild(base);
 
         // 右下动作按钮
-        const mkBtn = (label, bottom, color, onDown, onUp) => {
+        const mkBtn = (label, right, bottom, color, onDown, onUp) => {
             const btn = document.createElement('div');
             Object.assign(btn.style, {
-                position: 'fixed', right: '24px', bottom: bottom + 'px',
+                position: 'fixed', right: right + 'px', bottom: bottom + 'px',
                 width: '74px', height: '74px', borderRadius: '50%',
                 background: color, color: '#fff', fontSize: '15px', fontWeight: 'bold',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -11566,11 +11666,68 @@ export class Game3D {
             ui.appendChild(btn);
             return btn;
         };
-        mkBtn('⤴︎\n跳', 200, 'rgba(120,200,120,0.85)',
+        // 2×2 摆在小地图上方：小地图是 right:16 bottom:16 的 158px 方块，
+        // 以前按钮排成一竖列（bottom 20/110/200/290），最下面两个整个被小地图盖住点不到。
+        // 常用的打/跳放下排（拇指最好够），浇花/钓鱼放上排。
+        const COL_R = 24, COL_L = 106, ROW_LO = 190, ROW_HI = 272;
+        mkBtn('👊\n打', COL_R, ROW_LO, 'rgba(230,140,120,0.85)', () => this._doMeleeAttack());
+        mkBtn('⤴︎\n跳', COL_L, ROW_LO, 'rgba(120,200,120,0.85)',
             () => { this.keys['Space'] = true; }, () => { this.keys['Space'] = false; });
-        mkBtn('👊\n打', 290, 'rgba(230,140,120,0.85)', () => this._doMeleeAttack());
-        mkBtn('💧\n浇花', 110, 'rgba(120,180,230,0.85)', () => this._doWatering());
-        mkBtn('🎣\n钓鱼', 20, 'rgba(180,150,230,0.85)', () => this._toggleFishing());
+        mkBtn('💧\n浇花', COL_R, ROW_HI, 'rgba(120,180,230,0.85)', () => this._doWatering());
+        mkBtn('🎣\n钓鱼', COL_L, ROW_HI, 'rgba(180,150,230,0.85)', () => this._toggleFishing());
+
+        // 次要动作：商店/烤火/音乐/换造型 以前只绑了键盘（B/G/M/C），触屏上完全没入口。
+        // 四个都摆出来太占屏，收进一个"⋯"折叠菜单，摆在左侧避开右下动作区。
+        const more = [];
+        const mkMore = (label, i, onTap) => {
+            const b = document.createElement('div');
+            Object.assign(b.style, {
+                position: 'fixed', left: '24px', bottom: (100 + i * 62) + 'px',
+                width: '54px', height: '54px', borderRadius: '50%',
+                background: 'rgba(60,60,80,0.78)', color: '#fff', fontSize: '13px',
+                display: 'none', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 3px 10px rgba(0,0,0,0.3)', zIndex: '13',
+                textAlign: 'center', lineHeight: '1.15', whiteSpace: 'pre',
+            });
+            b.textContent = label;
+            b.addEventListener('touchstart', (e) => {
+                e.preventDefault(); e.stopPropagation();
+                this._ensureAudio();
+                b.style.transform = 'scale(0.92)';
+                onTap();
+            }, { passive: false });
+            const up = (e) => { e.stopPropagation(); b.style.transform = ''; };
+            b.addEventListener('touchend', up);
+            b.addEventListener('touchcancel', up);
+            ui.appendChild(b);
+            more.push(b);
+            return b;
+        };
+        mkMore('🛒\n商店', 0, () => {
+            if (this._nearShop()) this._openShop();
+            else this._showEasterBadge('🛒 走到广场商店摊前再点');
+        });
+        mkMore('🔥\n烤火', 1, () => this._doCampfire());
+        mkMore('🎵\n音乐', 2, () => this._toggleBGM());
+        mkMore('👗\n造型', 3, () => { if (this.onOpenCustomize) this.onOpenCustomize(); });
+
+        let moreOpen = false;
+        const moreBtn = document.createElement('div');
+        Object.assign(moreBtn.style, {
+            position: 'fixed', left: '24px', bottom: '30px',
+            width: '54px', height: '54px', borderRadius: '50%',
+            background: 'rgba(60,60,80,0.6)', color: '#fff', fontSize: '22px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 3px 10px rgba(0,0,0,0.3)', zIndex: '13',
+        });
+        moreBtn.textContent = '⋯';
+        moreBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            moreOpen = !moreOpen;
+            moreBtn.textContent = moreOpen ? '✕' : '⋯';
+            more.forEach(b => { b.style.display = moreOpen ? 'flex' : 'none'; });
+        }, { passive: false });
+        ui.appendChild(moreBtn);
 
         // 多点触控：左半屏=摇杆，右半屏=转视角
         let joyId = null, joyCx = 0, joyCy = 0, camId = null, camLX = 0, camLY = 0;
@@ -11620,8 +11777,8 @@ export class Game3D {
         ui.addEventListener('touchend', endTouch);
         ui.addEventListener('touchcancel', endTouch);
 
-        // 触屏不需要"点屏幕锁鼠标"，更新提示
-        if (this.hintEl) this.hintEl.textContent = '左下摇杆走 · 右半屏拖动看 · 右下按钮跳/打/浇花/钓鱼';
+        // 触屏提示文案统一在 _setupStatusUI 里按 isTouch 选，这里不再写
+        // （以前在这写过一次，但 _setupStatusUI 紧接着就 textContent='' 重建，写了也是白写）
     }
 
     _setupStatusUI() {
@@ -11634,7 +11791,12 @@ export class Game3D {
             this.hintEl.style.cursor = 'pointer';
             this.hintEl.style.userSelect = 'none';
             this.hintEl.title = '点一下 / 按 H 收起或展开';
-            const full = '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · I 仓库 · B 商店 · M 音乐 · C 换造型 · ESC 释放';
+            // 触屏和键盘是两套完全不同的操作，说明也得分开——以前这里只写键盘版，
+            // iPad 上点开"操作"看到的是 WASD/空格/J 这些根本做不到的键
+            const isTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+            const full = isTouch
+                ? '左下拖动走 · 右半屏拖动转视角 · 👊 打怪 · ⤴︎ 跳 · 💧 浇花 · 🎣 钓鱼 · ⋯ 更多（商店/烤火/音乐/造型）· 底部条开仓库'
+                : '点屏幕锁鼠标 · WASD 走 · 鼠标看 · 空格跳 · J 攻击 · E 浇花 · F 钓鱼 · G 烤火 · I 仓库 · B 商店 · M 音乐 · C 换造型 · ESC 释放';
             const tog = document.createElement('span');
             const txt = document.createElement('span');
             txt.style.marginLeft = '8px';
@@ -11649,6 +11811,12 @@ export class Game3D {
                 txt.textContent = collapsed ? '' : full;
                 txt.style.display = collapsed ? 'none' : 'inline';
                 this.hintEl.style.padding = collapsed ? '6px 14px' : '8px 18px';
+                // 展开后这行很长，窄屏上会超出视口被 body{overflow:hidden} 裁掉，
+                // 所以展开时限宽换行、圆角收一点（长胶囊换行后很丑）
+                this.hintEl.style.maxWidth = collapsed ? '' : 'min(92vw, 900px)';
+                this.hintEl.style.whiteSpace = collapsed ? '' : 'normal';
+                this.hintEl.style.borderRadius = collapsed ? '' : '16px';
+                this.hintEl.style.lineHeight = collapsed ? '' : '1.6';
                 try { localStorage.setItem('eggHintCollapsed', collapsed ? '1' : '0'); } catch (e) {}
             };
             apply();
@@ -11786,7 +11954,9 @@ export class Game3D {
         this._shadowTick = ((this._shadowTick || 0) + 1) % 3;
         if (this._shadowTick === 0) this.sun.shadow.needsUpdate = true;
 
-        this.composer.render();
+        this._cullPointLights();
+
+        this._render();
         this.animId = requestAnimationFrame(this._tick);
     }
 
