@@ -117,6 +117,73 @@ const IS_TOUCH = typeof navigator !== 'undefined'
     && (navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
 const BLUR = (css) => (IS_TOUCH ? 'none' : css);
 
+// ===== 静态批处理：单位几何 + 实例缩放 =====
+// iPad 上 5fps 的根因是约 1800 次 drawcall/帧的 CPU 开销（三角形才 34 万，GPU 毫无压力）。
+// 场景里 4800+ 个网格几乎每个都 new 了自己的几何和材质，所以没法直接 instancing。
+// 这里把几何归一化成"单位尺寸"，把大小挪进实例矩阵的缩放里——这样只要形状类别和细分
+// 段数相同就能合批，颜色走 instanceColor。实测 4873 网格 → 388 个批次。
+//
+// 每项返回 { key, build, scale }：key 相同的可合批，build() 造单位几何，scale 是该网格
+// 需要补的缩放（原尺寸）。参数里凡是影响形状而非大小的（段数/角度范围/开口）都进 key。
+function unitGeo(geo) {
+    const p = geo.parameters;
+    if (!p) return null;
+    const n = (v, d = 0) => (v === undefined ? d : v);
+    switch (geo.type) {
+        case 'SphereGeometry': {
+            const k = `S|${p.widthSegments}|${p.heightSegments}|${n(p.phiStart).toFixed(3)}|${n(p.phiLength, Math.PI * 2).toFixed(3)}|${n(p.thetaStart).toFixed(3)}|${n(p.thetaLength, Math.PI).toFixed(3)}`;
+            return { key: k, scale: [p.radius, p.radius, p.radius], build: () => new THREE.SphereGeometry(1, p.widthSegments, p.heightSegments, p.phiStart, p.phiLength, p.thetaStart, p.thetaLength) };
+        }
+        case 'BoxGeometry': {
+            const k = `B|${p.widthSegments}|${p.heightSegments}|${p.depthSegments}`;
+            return { key: k, scale: [p.width, p.height, p.depth], build: () => new THREE.BoxGeometry(1, 1, 1, p.widthSegments, p.heightSegments, p.depthSegments) };
+        }
+        case 'CylinderGeometry': {
+            // 圆台上下半径比影响形状，必须进 key；基准取较大的那个半径
+            const base = Math.max(p.radiusTop, p.radiusBottom);
+            if (base <= 0) return null;
+            const rt = p.radiusTop / base, rb = p.radiusBottom / base;
+            const k = `C|${rt.toFixed(4)}|${rb.toFixed(4)}|${p.radialSegments}|${p.heightSegments}|${p.openEnded}|${n(p.thetaLength, Math.PI * 2).toFixed(3)}`;
+            return { key: k, scale: [base, p.height, base], build: () => new THREE.CylinderGeometry(rt, rb, 1, p.radialSegments, p.heightSegments, p.openEnded, p.thetaStart, p.thetaLength) };
+        }
+        case 'ConeGeometry': {
+            if (!(p.radius > 0)) return null;
+            const k = `K|${p.radialSegments}|${p.heightSegments}|${p.openEnded}|${n(p.thetaLength, Math.PI * 2).toFixed(3)}`;
+            return { key: k, scale: [p.radius, p.height, p.radius], build: () => new THREE.ConeGeometry(1, 1, p.radialSegments, p.heightSegments, p.openEnded, p.thetaStart, p.thetaLength) };
+        }
+        case 'CircleGeometry': {
+            if (!(p.radius > 0)) return null;
+            const k = `Ci|${p.segments}|${n(p.thetaStart).toFixed(3)}|${n(p.thetaLength, Math.PI * 2).toFixed(3)}`;
+            return { key: k, scale: [p.radius, p.radius, 1], build: () => new THREE.CircleGeometry(1, p.segments, p.thetaStart, p.thetaLength) };
+        }
+        case 'PlaneGeometry': {
+            const k = `P|${p.widthSegments}|${p.heightSegments}`;
+            return { key: k, scale: [p.width, p.height, 1], build: () => new THREE.PlaneGeometry(1, 1, p.widthSegments, p.heightSegments) };
+        }
+        case 'TorusGeometry': {
+            if (!(p.radius > 0)) return null;
+            const tube = p.tube / p.radius;
+            const k = `T|${tube.toFixed(4)}|${p.radialSegments}|${p.tubularSegments}|${n(p.arc, Math.PI * 2).toFixed(3)}`;
+            return { key: k, scale: [p.radius, p.radius, p.radius], build: () => new THREE.TorusGeometry(1, tube, p.radialSegments, p.tubularSegments, p.arc) };
+        }
+        case 'RingGeometry': {
+            if (!(p.outerRadius > 0)) return null;
+            const inner = p.innerRadius / p.outerRadius;
+            const k = `R|${inner.toFixed(4)}|${p.thetaSegments}|${p.phiSegments}`;
+            return { key: k, scale: [p.outerRadius, p.outerRadius, 1], build: () => new THREE.RingGeometry(inner, 1, p.thetaSegments, p.phiSegments) };
+        }
+        // 其余（BufferGeometry/Shape/多面体等）尺寸不在参数里，无法归一化，保持原样不批
+        default: return null;
+    }
+}
+
+// 材质合批 key：颜色不进 key（走 instanceColor），其余影响外观的都要进
+function matKeyOf(m) {
+    return [m.type, m.flatShading, m.transparent, m.opacity, m.side, m.depthWrite, m.depthTest,
+        m.map ? m.map.uuid : '', m.emissive ? m.emissive.getHexString() : '',
+        m.emissiveIntensity, m.vertexColors, m.alphaTest, m.wireframe, m.fog].join('|');
+}
+
 // 三阶赛璐璐光影 ramp：暗部/中间调/亮部，所有 MeshToonMaterial 共享
 function makeToonRampTexture() {
     const data = new Uint8Array([
@@ -598,6 +665,8 @@ export class Game3D {
         this.DBG = {
             nopost: _q.has('nopost'), nobloom: _q.has('nobloom'), nograde: _q.has('nograde'),
             noshadow: _q.has('noshadow'), notone: _q.has('notone'), on: _q.has('dbg'),
+            batch: _q.has('batch'),
+            batchOnly: _q.get('batchonly') || '',   // 只批指定前缀的几何类型，用于二分定位画坏的是谁
         };
         if (this.DBG.on) this._initDebugOverlay();
 
@@ -754,6 +823,147 @@ export class Game3D {
         });
         if (!this.DBG.nograde) this.composer.addPass(this.gradePass);
         this.composer.addPass(new OutputPass());
+    }
+
+    // 会动的东西都登记在这些数组/字段里，整棵子树都不能批。
+    // 这个清单是实测出来的：挂钩 Object3D.add 记录创建位置，跑 40s（走动+快进昼夜）
+    // 看哪些网格的世界矩阵变过，再回溯到它们的登记处。描边(addOutline)是动态网格的
+    // 子节点，标记父级会自动覆盖，不用单列。
+    static DYNAMIC_ARRAYS = [
+        'monsters', 'npcs', 'storyNpcs', 'chickens', 'bunnies', 'bats', 'birds', 'butterflies',
+        'fireflies', 'skyClouds', 'shootingStars', 'fireworks', 'smokeParticles', 'landParticles',
+        'waterDrops', 'wateringDrops', 'ripples', 'fountainParticles', 'footprints', 'collectStars',
+        'extractOrbs', 'chests', 'questItems', 'campfires', 'candles', 'holidayLights', 'lampposts',
+        'animDecor', 'snowmen', 'laundry', 'goals', 'spikes', 'beds',
+        '_bunting', '_petals', '_breathPuffs', '_sweatDrops', '_fishLeaps', '_playerHurtMeshes',
+        '_arms', '_legs', '_birdWings',
+    ];
+    static DYNAMIC_SINGLES = [
+        'player', 'companion', 'sunMesh', 'sunGlow', 'moonMesh', 'moonGlow', 'skyDome',
+        'magicBird', 'hotAirBalloon', 'lighthouse', 'rainbow', 'fishingLine', 'fishingBoat',
+        'swimRing', 'bellTower', 'lake', 'extractPad', 'extractBird', 'mountBird',
+    ];
+
+    _markDynamicSubtrees() {
+        let n = 0;
+        const mark = (o) => {
+            if (!o || !o.isObject3D) return;
+            o.traverse(x => { (x.userData || (x.userData = {})).dynamic = true; n++; });
+        };
+        for (const f of Game3D.DYNAMIC_ARRAYS) {
+            const v = this[f];
+            if (!Array.isArray(v)) continue;
+            for (const it of v) {
+                if (!it) continue;
+                if (it.isObject3D) { mark(it); continue; }
+                // 登记项常是 {group|mesh|obj|...} 包着 Object3D
+                for (const k in it) if (it[k] && it[k].isObject3D) mark(it[k]);
+            }
+        }
+        for (const f of Game3D.DYNAMIC_SINGLES) mark(this[f]);
+        return n;
+    }
+
+    // 校验：按参数重建的单位几何 × 缩放，包围盒必须和源几何一致才能批。
+    // 必要性——很多道具在创建后对几何做了 geo.translate()/rotateX() 把变换烘进顶点
+    // （典型：地面圆盘 new CircleGeometry(r,12) 之后 .rotateX(-π/2) 放平），
+    // 而 geometry.parameters 完全不记录这些后续烘焙。照参数重建就会丢掉它们，
+    // 表现为一堆朝向错误、位置错乱的巨大黑色平板。对不上的一律不批，保守但正确。
+    _unitGeoMatches(geo, u) {
+        const cache = this._unitBoxCache || (this._unitBoxCache = new Map());
+        let ub = cache.get(u.key);
+        if (!ub) {
+            const g = u.build();
+            g.computeBoundingBox();
+            ub = g.boundingBox.clone();
+            g.dispose();
+            cache.set(u.key, ub);
+        }
+        if (!geo.boundingBox) geo.computeBoundingBox();
+        const b = geo.boundingBox;
+        const [sx, sy, sz] = u.scale;
+        // 容差按物体尺寸走，纯浮点误差不该被判成不匹配
+        const size = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z, 1e-3);
+        const eps = size * 0.02 + 1e-4;
+        return Math.abs(ub.min.x * sx - b.min.x) < eps && Math.abs(ub.max.x * sx - b.max.x) < eps
+            && Math.abs(ub.min.y * sy - b.min.y) < eps && Math.abs(ub.max.y * sy - b.max.y) < eps
+            && Math.abs(ub.min.z * sz - b.min.z) < eps && Math.abs(ub.max.z * sz - b.max.z) < eps;
+    }
+
+    // 把静态网格按"单位几何+材质"合成 InstancedMesh，大幅削减 drawcall
+    _batchStaticProps() {
+        const t0 = performance.now();
+        this._markDynamicSubtrees();
+        this.scene.updateMatrixWorld(true);
+
+        const groups = new Map();
+        const isDyn = (o) => {
+            for (let n = o; n; n = n.parent) if (n.userData && n.userData.dynamic) return true;
+            return false;
+        };
+        this.scene.traverse(o => {
+            if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) return;
+            if (Array.isArray(o.material)) return;         // 多材质网格不批
+            if (!o.material || o.userData.noBatch) return;
+            if (isDyn(o)) return;
+            const u = unitGeo(o.geometry);
+            if (!u) return;
+            if (this.DBG.batchOnly && !this.DBG.batchOnly.split(',').includes(u.key[0] === 'C' && u.key[1] === 'i' ? 'Ci' : u.key[0])) return;
+            if (!this._unitGeoMatches(o.geometry, u)) return;
+            const key = u.key + '##' + matKeyOf(o.material) +
+                '##' + (o.castShadow ? 1 : 0) + (o.receiveShadow ? 1 : 0);
+            let g = groups.get(key);
+            if (!g) { groups.set(key, g = { u, mat: o.material, items: [], cast: o.castShadow, recv: o.receiveShadow }); }
+            g.items.push(o);
+        });
+
+        const scaleV = new THREE.Vector3();
+        const m4 = new THREE.Matrix4();
+        let batched = 0, made = 0;
+
+        // 第一趟：只算矩阵/颜色，一个都不动。必须和第二趟分开——摘除网格会改动父子关系，
+        // 边算边摘的话后面那些的 matrixWorld 就不可信了。
+        const plan = [];
+        for (const g of groups.values()) {
+            if (g.items.length < 4) continue;              // 太少不值得，留原样
+            const mats = [], cols = [];
+            for (const o of g.items) {
+                o.updateWorldMatrix(true, false);
+                scaleV.set(g.u.scale[0], g.u.scale[1], g.u.scale[2]);
+                // 世界矩阵 × 单位化补偿缩放（M*S：缩放在局部先作用，再走世界变换）
+                mats.push(m4.copy(o.matrixWorld).scale(scaleV).clone());
+                cols.push(o.material.color || null);
+            }
+            plan.push({ g, mats, cols });
+        }
+
+        // 第二趟：建 InstancedMesh 并把源网格摘掉
+        for (const { g, mats, cols } of plan) {
+            const inst = new THREE.InstancedMesh(g.u.build(), g.mat.clone(), g.items.length);
+            inst.castShadow = g.cast; inst.receiveShadow = g.recv;
+            inst.userData.dynamic = true;                  // 别被后续再次批处理
+            inst.frustumCulled = false;                    // 实例散布全图，整体剔除会误杀
+            for (let i = 0; i < mats.length; i++) {
+                inst.setMatrixAt(i, mats[i]);
+                if (cols[i]) inst.setColorAt(i, cols[i]);
+            }
+            for (const o of g.items) {
+                const par = o.parent;
+                if (!par) continue;
+                // 子节点(描边/附属小件)不能跟着一起消失：用 attach 挪到原父级，保持世界变换
+                while (o.children.length) par.attach(o.children[0]);
+                par.remove(o);
+                // 注意：绝不 dispose 几何——addOutline 的描边直接复用父级 geometry，
+                // 其它地方也有共享，dispose 掉还在用的几何会让那些网格画成黑块
+            }
+            inst.instanceMatrix.needsUpdate = true;
+            if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+            this.scene.add(inst);
+            batched += g.items.length; made++;
+        }
+        this._batchStat = { groups: groups.size, made, batched, ms: +(performance.now() - t0).toFixed(1) };
+        if (window.__PERF__ || this.DBG.on) console.log('[BATCH]', JSON.stringify(this._batchStat));
+        return this._batchStat;
     }
 
     // ===== 点光源裁剪：只让离玩家最近的几盏"进"场景 =====
@@ -1135,6 +1345,9 @@ export class Game3D {
         this._initQuest();
         // ===== 性能：把大量静态散物(树/松/石/灌木)按量化颜色合并成几个大网格 =====
         this.__t('mergeStatic', () => { this._mergeStat = this._mergeStaticProps(); });
+        // 实例化批处理：drawcall 1940→995，但目前会画坏(移除被批网格时把它的子节点
+        // 一起摘走了，且嵌套变换未处理)，所以默认关闭，只有 ?batch=1 才开，供继续调试。
+        if (this.DBG.batch) this.__t('batchStatic', () => this._batchStaticProps());
     }
 
     _buildHouses() {
