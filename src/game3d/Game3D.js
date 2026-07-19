@@ -111,6 +111,12 @@ function makeGrassTexture() {
     return tex;
 }
 
+// 触屏设备判定（模块级算一次）。iPad 上 backdrop-filter 叠在实时 WebGL 画布上
+// 要持续重新合成模糊背景，开销极高，触屏一律不用。
+const IS_TOUCH = typeof navigator !== 'undefined'
+    && (navigator.maxTouchPoints > 0 || 'ontouchstart' in window);
+const BLUR = (css) => (IS_TOUCH ? 'none' : css);
+
 // 三阶赛璐璐光影 ramp：暗部/中间调/亮部，所有 MeshToonMaterial 共享
 function makeToonRampTexture() {
     const data = new Uint8Array([
@@ -602,6 +608,10 @@ export class Game3D {
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.toneMapping = this.DBG.notone ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.1;
+        // info 默认每次 render() 自动清零，而后处理链有好几个 pass，
+        // 在末尾读只能读到最后那个全屏四边形（网格1/三角0）。关掉自动清零、
+        // 每帧开头手动 reset，读到的才是整帧累计的真实数字。
+        this.renderer.info.autoReset = false;
         if (this.DBG.on) this._dbgReport(this.renderer);
         this.container.appendChild(this.renderer.domElement);
 
@@ -783,6 +793,39 @@ export class Game3D {
         }
     }
 
+    // HUD 上的可点元素统一走这里绑定。
+    // iOS 里 <div> 的 click 是 touchend 之后"合成"出来的，在这种全屏 canvas +
+    // touch-action:none 的页面上很不可靠——实测 iPad 上任务面板完全点不动、仓库要连点好几下
+    // 才开，而动作按钮（显式监听 touchstart）从来没问题。所以触屏直接吃 touchend，
+    // 并 preventDefault 掉那个合成 click（否则 handler 会跑两遍）；鼠标端仍走 click。
+    _bindTap(el, handler) {
+        el.onclick = handler;
+        const isTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+        if (!isTouch) return;
+        const tag = el.id || el.className || 'el';
+        // 带序号：诊断面板会把内容相同的行去重，不编号的话连点看不出来
+        const dbg = (m) => {
+            if (!(this.DBG && this.DBG.on && this._dbgLog)) return;
+            this._tapSeq = (this._tapSeq || 0) + 1;
+            this._dbgLog('TAP', `#${this._tapSeq} ${tag} ${m}`);
+        };
+        let startedHere = false;
+        el.addEventListener('touchstart', (e) => {
+            startedHere = true;
+            dbg('touchstart');
+            e.stopPropagation();        // 别让底下的拖拽层同时把它当成摇杆/转视角
+        }, { passive: true });
+        el.addEventListener('touchend', (e) => {
+            if (!startedHere) { dbg('touchend(忽略:非本元素起手)'); return; }
+            startedHere = false;
+            e.preventDefault();
+            e.stopPropagation();
+            dbg('touchend→触发');
+            handler(e);
+        }, { passive: false });
+        el.addEventListener('touchcancel', () => { startedHere = false; dbg('touchcancel'); });
+    }
+
     // 出图：?nopost=1 时绕过整条后处理链，直接渲染（诊断用）
     _render() {
         if (this.DBG.nopost) this.renderer.render(this.scene, this.camera);
@@ -815,6 +858,27 @@ export class Game3D {
         const warn = console.warn.bind(console), err = console.error.bind(console);
         console.warn = (...a) => { log('WARN', a.join(' ')); warn(...a); };
         console.error = (...a) => { log('ERROR', a.join(' ')); err(...a); };
+    }
+
+    // 实时帧率／帧时间，固定显示在诊断面板顶部（iPad 上没控制台，只能这样看）
+    _dbgFps() {
+        const now = performance.now();
+        if (!this._fpsT0) { this._fpsT0 = now; this._fpsN = 0; return; }
+        this._fpsN++;
+        if (now - this._fpsT0 < 1000) return;
+        const fps = this._fpsN * 1000 / (now - this._fpsT0);
+        this._fpsT0 = now; this._fpsN = 0;
+        if (!this._fpsEl) {
+            this._fpsEl = document.createElement('div');
+            this._fpsEl.style.cssText = 'position:fixed;left:0;top:0;z-index:99999;padding:3px 8px;' +
+                'background:rgba(0,0,0,.8);color:#0f0;font:12px monospace';
+            document.body.appendChild(this._fpsEl);
+        }
+        const info = this.renderer.info;
+        const flags = Object.entries(this.DBG).filter(([k, v]) => v && k !== 'on').map(([k]) => k).join(',') || '默认';
+        this._fpsEl.textContent =
+            `${fps.toFixed(0)}fps ${(1000 / fps).toFixed(0)}ms | drawcall ${info.render.calls}` +
+            ` 三角${(info.render.triangles / 1000).toFixed(0)}k | ${flags}`;
     }
 
     _dbgReport(renderer) {
@@ -2207,13 +2271,13 @@ export class Game3D {
         this._questHudCollapsed = true;
         try { this._questHudCollapsed = localStorage.getItem('eggQuestHudCollapsed') !== '0'; } catch (e) {}
         this._questChip.title = '点击展开或收起任务引导';
-        this._questChip.onclick = (e) => {
+        this._bindTap(this._questChip, (e) => {
             e.stopPropagation();
             this._questHudCollapsed = !this._questHudCollapsed;
             try { localStorage.setItem('eggQuestHudCollapsed', this._questHudCollapsed ? '1' : '0'); } catch (err) {}
             this._updateQuestHud();
             this._updateObjective();
-        };
+        });
         this._updateQuestHud();
 
         const prog = this._loadProgress();
@@ -4356,7 +4420,7 @@ export class Game3D {
             boxShadow: '0 6px 22px rgba(0,0,0,0.3)',
             zIndex: '21', pointerEvents: 'none',
             transition: 'opacity 0.5s, transform 0.5s', opacity: '0',
-            backdropFilter: 'blur(2px)',
+            backdropFilter: BLUR('blur(2px)'),
         });
         document.body.appendChild(this._feelChip);
 
@@ -7485,6 +7549,8 @@ export class Game3D {
         if (!bar) {
             bar = document.createElement('div');
             bar.id = 'inventory-bar';
+            // 注意：bottom 由 style.css 的 #inventory-bar{bottom:10px!important} 说了算，
+            // 这里写多少都会被覆盖。触屏抬高避开 Home 指示器手势区的规则也在那边。
             Object.assign(bar.style, {
                 position: 'fixed', bottom: '12px', left: '50%',
                 transform: 'translateX(-50%)',
@@ -7498,7 +7564,7 @@ export class Game3D {
                 alignItems: 'center',
             });
             bar.title = '点开看仓库（宝石 / 道具）· 快捷键 I';
-            bar.onclick = () => this._openBag();
+            this._bindTap(bar, () => this._openBag());
             document.body.appendChild(bar);
         }
         const label = '<span style="font-size:16px;margin-right:4px">🎒</span>';
@@ -7539,7 +7605,7 @@ export class Game3D {
         Object.assign(el.style, {
             position: 'fixed', inset: '0', zIndex: '41', display: 'flex',
             alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(16,20,34,0.55)', backdropFilter: 'blur(2px)',
+            background: 'rgba(16,20,34,0.55)', backdropFilter: BLUR('blur(2px)'),
         });
         document.body.appendChild(el);
         this._bagEl = el;
@@ -10592,7 +10658,7 @@ export class Game3D {
         Object.assign(el.style, {
             position: 'fixed', inset: '0', zIndex: '40', display: 'flex',
             alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(20,12,30,0.55)', backdropFilter: 'blur(2px)',
+            background: 'rgba(20,12,30,0.55)', backdropFilter: BLUR('blur(2px)'),
         });
         el.innerHTML = `
             <div style="width:min(92vw,520px);max-height:86vh;overflow:auto;background:linear-gradient(160deg,#fff7ee,#ffe9d6);
@@ -11620,13 +11686,25 @@ export class Game3D {
         const isTouch = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
         if (!isTouch) return;
 
+        // 拖拽层：盖满全屏接摇杆/转视角的触摸。z-index 必须低于所有 HUD——
+        // 以前它是 12，把 #game-hint(z5)、#inventory-bar(z6) 这些可点元素整个挡住，
+        // 在 iPad 上"操作说明""仓库"点都点不开（鼠标端没这层覆盖所以一直没暴露）。
         const ui = document.createElement('div');
         Object.assign(ui.style, {
-            position: 'fixed', inset: '0', zIndex: '12',
+            position: 'fixed', inset: '0', zIndex: '4',
             touchAction: 'none', userSelect: 'none',
         });
         document.body.appendChild(ui);
         this._touchUI = ui;
+
+        // 动作按钮单独一层放在最上面：本身 pointerEvents:none 不吃触摸，
+        // 只有按钮自己 auto，这样按钮之外的区域照样能拖视角
+        const btnLayer = document.createElement('div');
+        Object.assign(btnLayer.style, {
+            position: 'fixed', inset: '0', zIndex: '30', pointerEvents: 'none',
+        });
+        document.body.appendChild(btnLayer);
+        this._touchBtnLayer = btnLayer;
 
         // 左下虚拟摇杆（按下才出现）
         const base = document.createElement('div');
@@ -11651,7 +11729,8 @@ export class Game3D {
                 width: '74px', height: '74px', borderRadius: '50%',
                 background: color, color: '#fff', fontSize: '15px', fontWeight: 'bold',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.3)', zIndex: '13', textAlign: 'center',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)', textAlign: 'center',
+                pointerEvents: 'auto',
             });
             btn.textContent = label;
             btn.addEventListener('touchstart', (e) => {
@@ -11663,7 +11742,7 @@ export class Game3D {
             const up = (e) => { e.stopPropagation(); btn.style.transform = ''; onUp && onUp(); };
             btn.addEventListener('touchend', up);
             btn.addEventListener('touchcancel', up);
-            ui.appendChild(btn);
+            btnLayer.appendChild(btn);
             return btn;
         };
         // 2×2 摆在小地图上方：小地图是 right:16 bottom:16 的 158px 方块，
@@ -11686,7 +11765,7 @@ export class Game3D {
                 width: '54px', height: '54px', borderRadius: '50%',
                 background: 'rgba(60,60,80,0.78)', color: '#fff', fontSize: '13px',
                 display: 'none', alignItems: 'center', justifyContent: 'center',
-                boxShadow: '0 3px 10px rgba(0,0,0,0.3)', zIndex: '13',
+                boxShadow: '0 3px 10px rgba(0,0,0,0.3)', pointerEvents: 'auto',
                 textAlign: 'center', lineHeight: '1.15', whiteSpace: 'pre',
             });
             b.textContent = label;
@@ -11699,7 +11778,7 @@ export class Game3D {
             const up = (e) => { e.stopPropagation(); b.style.transform = ''; };
             b.addEventListener('touchend', up);
             b.addEventListener('touchcancel', up);
-            ui.appendChild(b);
+            btnLayer.appendChild(b);
             more.push(b);
             return b;
         };
@@ -11718,7 +11797,7 @@ export class Game3D {
             width: '54px', height: '54px', borderRadius: '50%',
             background: 'rgba(60,60,80,0.6)', color: '#fff', fontSize: '22px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 3px 10px rgba(0,0,0,0.3)', zIndex: '13',
+            boxShadow: '0 3px 10px rgba(0,0,0,0.3)', pointerEvents: 'auto',
         });
         moreBtn.textContent = '⋯';
         moreBtn.addEventListener('touchstart', (e) => {
@@ -11727,7 +11806,7 @@ export class Game3D {
             moreBtn.textContent = moreOpen ? '✕' : '⋯';
             more.forEach(b => { b.style.display = moreOpen ? 'flex' : 'none'; });
         }, { passive: false });
-        ui.appendChild(moreBtn);
+        btnLayer.appendChild(moreBtn);
 
         // 多点触控：左半屏=摇杆，右半屏=转视角
         let joyId = null, joyCx = 0, joyCy = 0, camId = null, camLX = 0, camLY = 0;
@@ -11821,7 +11900,7 @@ export class Game3D {
             };
             apply();
             this._toggleHint = () => { collapsed = !collapsed; apply(); };
-            this.hintEl.onclick = (ev) => { ev.stopPropagation(); this._toggleHint(); };
+            this._bindTap(this.hintEl, (ev) => { ev.stopPropagation(); this._toggleHint(); });
         }
     }
 
@@ -11836,6 +11915,15 @@ export class Game3D {
     _tick() {
         this._frames = (this._frames || 0) + 1;
         const dt = Math.min(this.clock.getDelta(), 0.05);
+
+        // 弹窗盖住全屏时，底下的 3D 一帧都看不见，却还在照常跑物理/天气/NPC/粒子并渲染整个场景。
+        // iPad 上这点开销足以把主线程压垮——表现为弹窗打开迟钝、关闭按钮点了没反应、音频嗡鸣。
+        // 直接整帧跳过（rAF 继续转，关闭后立刻恢复），顺便把 clock 的时间差吃掉，
+        // 免得关闭瞬间攒出一个巨大的 dt 让人物瞬移。
+        if (this._bagOpen || this._shopOpen || this._warehouseOpen) {
+            this.animId = requestAnimationFrame(this._tick);
+            return;
+        }
 
         if (!this.won && !this.dying && !this._extractMounted) {
             this._updatePlayer(dt);
@@ -11956,7 +12044,9 @@ export class Game3D {
 
         this._cullPointLights();
 
+        this.renderer.info.reset();   // 配合 autoReset=false，统计整帧所有 pass
         this._render();
+        if (this.DBG.on) this._dbgFps();
         this.animId = requestAnimationFrame(this._tick);
     }
 

@@ -417,6 +417,16 @@ body {
     backdrop-filter: blur(6px);
 }
 
+/* 触屏（iPad/手机）：贴底 10px 时条的底边离屏幕只剩 10px，正落在 iOS Home 指示器的
+   手势区里，触摸被系统抢走——表现为"点不开"或"要连点好几次才中"。抬高避开。
+   必须放在上面那条之后：同特异性 + 同为 !important 时后写的才生效。
+   env() 需要 viewport-fit=cover 才非零，没有时退化为 0，仍有 44px 保底。 */
+@media (pointer: coarse) {
+    #inventory-bar {
+        bottom: calc(44px + env(safe-area-inset-bottom)) !important;
+    }
+}
+
 @media (max-width: 900px) {
     #game-hint { max-width: 46vw; left: 42%; font-size: 12px; }
     #game-time, #game-weather, #game-stars, #game-greet, #game-season,
@@ -424,4 +434,16 @@ body {
     #game-extract { max-width: 260px; }
     #objective-chip { max-width: 55vw !important; }
     #inventory-bar { max-width: 58vw; }
+}
+
+/* 触屏（iPad/手机）：backdrop-filter 叠在实时 WebGL 画布上，浏览器每帧都要重新合成
+   一次模糊背景，7 处 HUD 加起来在 iPad 上足以把主线程压垮（表现为弹窗打开迟钝、
+   按钮点了没反应、音频嗡鸣）。触屏一律关掉——这些胶囊本来就有半透明底色，
+   少一层模糊几乎看不出差别。放在最后，覆盖前面各处的 backdrop-filter。 */
+@media (pointer: coarse) {
+    #game-hint, #quest-chip, #objective-chip, #inventory-bar,
+    #game-achievements, #game-extract, #game-treasure {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
 }
