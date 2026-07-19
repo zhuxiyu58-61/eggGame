@@ -870,24 +870,30 @@ export class Game3D {
     // 而 geometry.parameters 完全不记录这些后续烘焙。照参数重建就会丢掉它们，
     // 表现为一堆朝向错误、位置错乱的巨大黑色平板。对不上的一律不批，保守但正确。
     _unitGeoMatches(geo, u) {
-        const cache = this._unitBoxCache || (this._unitBoxCache = new Map());
-        let ub = cache.get(u.key);
-        if (!ub) {
+        const cache = this._unitPosCache || (this._unitPosCache = new Map());
+        let ref = cache.get(u.key);
+        if (ref === undefined) {
             const g = u.build();
-            g.computeBoundingBox();
-            ub = g.boundingBox.clone();
+            const a = g.attributes.position;
+            ref = a ? a.array : null;
             g.dispose();
-            cache.set(u.key, ub);
+            cache.set(u.key, ref);
         }
-        if (!geo.boundingBox) geo.computeBoundingBox();
-        const b = geo.boundingBox;
+        if (!ref) return false;
+        const src = geo.attributes.position;
+        if (!src || src.array.length !== ref.length) return false;
+        const a = src.array;
         const [sx, sy, sz] = u.scale;
-        // 容差按物体尺寸走，纯浮点误差不该被判成不匹配
-        const size = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z, 1e-3);
-        const eps = size * 0.02 + 1e-4;
-        return Math.abs(ub.min.x * sx - b.min.x) < eps && Math.abs(ub.max.x * sx - b.max.x) < eps
-            && Math.abs(ub.min.y * sy - b.min.y) < eps && Math.abs(ub.max.y * sy - b.max.y) < eps
-            && Math.abs(ub.min.z * sz - b.min.z) < eps && Math.abs(ub.max.z * sz - b.max.z) < eps;
+        // 逐顶点比，不能只比包围盒——正方形截面的盒子绕 Y 轴烘焙旋转 90° 后 AABB 完全不变，
+        // 包围盒校验放行了它，实例矩阵却没有那个旋转，画出来就是错位的大黑板。
+        const s = Math.max(Math.abs(sx), Math.abs(sy), Math.abs(sz), 1e-3);
+        const eps = s * 1e-3 + 1e-5;
+        for (let i = 0; i < a.length; i += 3) {
+            if (Math.abs(ref[i] * sx - a[i]) > eps) return false;
+            if (Math.abs(ref[i + 1] * sy - a[i + 1]) > eps) return false;
+            if (Math.abs(ref[i + 2] * sz - a[i + 2]) > eps) return false;
+        }
+        return true;
     }
 
     // 把静态网格按"单位几何+材质"合成 InstancedMesh，大幅削减 drawcall
@@ -905,6 +911,9 @@ export class Game3D {
             if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh) return;
             if (Array.isArray(o.material)) return;         // 多材质网格不批
             if (!o.material || o.userData.noBatch) return;
+            // 描边(addOutline)：BackSide + 放大 1.05 倍，靠"藏在本体背面"才不可见。
+            // 一旦本体和描边被拆进不同批次、绘制顺序变了，描边就翻出来变成实心黑片。
+            if (o.material.side === THREE.BackSide) return;
             if (isDyn(o)) return;
             const u = unitGeo(o.geometry);
             if (!u) return;
@@ -939,7 +948,11 @@ export class Game3D {
 
         // 第二趟：建 InstancedMesh 并把源网格摘掉
         for (const { g, mats, cols } of plan) {
-            const inst = new THREE.InstancedMesh(g.u.build(), g.mat.clone(), g.items.length);
+            // 批次材质的 color 必须置白：着色器里最终颜色 = material.color × instanceColor，
+            // 不置白就等于把颜色乘了两次(color²)，整体发暗、同批不同色的物件还会串味
+            const bmat = g.mat.clone();
+            if (bmat.color) bmat.color.setRGB(1, 1, 1);
+            const inst = new THREE.InstancedMesh(g.u.build(), bmat, g.items.length);
             inst.castShadow = g.cast; inst.receiveShadow = g.recv;
             inst.userData.dynamic = true;                  // 别被后续再次批处理
             inst.frustumCulled = false;                    // 实例散布全图，整体剔除会误杀
